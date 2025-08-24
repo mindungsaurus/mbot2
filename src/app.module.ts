@@ -11,7 +11,7 @@ import { GoldModule } from './gold/gold.module';
     NecordModule.forRoot({
       token: process.env.DISCORD_TOKEN ?? '',
       intents: [IntentsBitField.Flags.Guilds],
-      development: ['1284642997375336592'],
+      development: ['1284642997375336592', '1273347630767804539'],
     }),
     GoldModule,
   ],

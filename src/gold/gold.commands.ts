@@ -15,7 +15,10 @@ import { InteractionResponse } from 'discord.js';
 import { ExpenseResult } from './gold.service';
 import { CharacterGoldTransactionDTO } from './CharacterGoldTransaction-dto';
 
-const ALLOWED = new Set<string>(['1166898785360810014', '1280856735023628308']);
+export const ALLOWED = new Set<string>([
+  '1166898785360810014',
+  '1280856735023628308',
+]);
 
 @Injectable()
 export class GoldCommands {

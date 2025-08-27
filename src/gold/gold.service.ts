@@ -21,6 +21,8 @@ export enum TextColor {
   BOLD_GREEN = 'bold_green',
   BOLD_PINK = 'bold_pink',
   BOLD_BLUE = 'bold_blue',
+  BOLD_LIME = 'bold_lime',
+  NONE = 'none',
 }
 
 export class GoldInfo {
@@ -515,6 +517,16 @@ export class GoldService {
       case TextColor.BOLD_BLUE:
         colorParts = '[2;34m';
         break;
+
+      case TextColor.BOLD_LIME:
+        colorParts = '[1;32m';
+        break;
+
+      case TextColor.BOLD_GRAY:
+        colorParts = '[1;30m';
+
+      case TextColor.NONE:
+        colorParts = '';
     }
 
     let head = '';

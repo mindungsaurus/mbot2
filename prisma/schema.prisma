@@ -22,3 +22,21 @@ model CharacterGold {
   friend       String?
   day          Int?
 }
+
+model ItemsInfo {
+  id      Int    @id @default(autoincrement())
+  name    String @unique
+  quality Int
+  unit    String
+  type    String
+  noSpace String @unique
+}
+
+model Inventory {
+  id       Int    @id @default(autoincrement())
+  itemName String
+  amount   Int
+  owner    String
+
+  @@unique([owner, itemName])
+}

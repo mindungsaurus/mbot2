@@ -15,7 +15,7 @@ import {
   ModalBuilder,
   TextInputBuilder,
 } from 'discord.js';
-import { ItemsService } from './items.service';
+import { ItemsService, ItemTransactionResult } from './items.service';
 import { ItemsTransactionsInfoDTO } from './ItemsTransactionsInfo-dto';
 import { ALLOWED } from 'src/gold/gold.commands';
 import { GoldService } from 'src/gold/gold.service';
@@ -26,6 +26,7 @@ import { ItemsUseInfoDTO } from './ItemsUseInfo-dto';
 import { CharacterNameDTO } from 'src/gold/CharacterName-dto';
 import { CharacterGoldDTO } from 'src/gold/CharacterGold-dto';
 import { ItemsPageDTO } from './ItemsPage-dto';
+import { ItemsAliasDTO } from './ItemAlias-dto';
 
 @Injectable()
 export class ItemsCommands {
@@ -120,6 +121,36 @@ export class ItemsCommands {
                 .setStyle(ButtonStyle.Primary),
             ),
           ],
+        });
+      } else if (result.scenario === 3) {
+        //별칭으로 찾은 경우
+        return interaction.reply({
+          content:
+            this.goldService.StringFormatter(
+              '📦 [아이템 획득 이벤트 발생 알림]',
+              TextColor.BOLD_WHITE,
+              true,
+              false,
+            ) +
+            '\n' +
+            this.goldService.StringFormatter(
+              `「${result.owner}」, `,
+              TextColor.BOLD_WHITE,
+              false,
+              false,
+            ) +
+            this.goldService.StringFormatter(
+              `[${itemsTransactionsInfoDTO.item_name} (${result.itemName})]`,
+              this.ColorParser(result.quality),
+              false,
+              false,
+            ) +
+            this.goldService.StringFormatter(
+              `을(를) ${result.amount}${result.unit}만큼 획득하였다.`,
+              TextColor.BOLD_WHITE,
+              false,
+              true,
+            ),
         });
       } else {
         if (
@@ -346,7 +377,6 @@ export class ItemsCommands {
     try {
       const result =
         await this.itemsService.TryUseItemInventory(itemsUseInfoDTO);
-      console.log(`아이템 지우는 건 제대로 됐음`);
       if (result.scenario === 0) {
         console.log(`시나리오 0번`);
         return interaction.reply({
@@ -408,6 +438,36 @@ export class ItemsCommands {
                 .setStyle(ButtonStyle.Primary),
             ),
           ],
+        });
+      } else if (result.scenario === 3) {
+        //별칭으로 찾은 경우
+        return interaction.reply({
+          content:
+            this.goldService.StringFormatter(
+              '📦 [아이템 소모 이벤트 발생 알림]',
+              TextColor.BOLD_WHITE,
+              true,
+              false,
+            ) +
+            '\n' +
+            this.goldService.StringFormatter(
+              `「${result.owner}」, `,
+              TextColor.BOLD_WHITE,
+              false,
+              false,
+            ) +
+            this.goldService.StringFormatter(
+              `[${itemsUseInfoDTO.item_name} (${result.itemName})]`,
+              this.ColorParser(result.quality),
+              false,
+              false,
+            ) +
+            this.goldService.StringFormatter(
+              `을(를) ${result.amount}${result.unit}만큼 소모하였다.`,
+              TextColor.BOLD_WHITE,
+              false,
+              true,
+            ),
         });
       }
     } catch (err: any) {
@@ -522,6 +582,205 @@ export class ItemsCommands {
       }
       return interaction.reply({
         content: this.itemsService.InfoPageStringBuilder(page),
+        components: row.components.length ? [row] : [],
+      });
+    } catch (err: any) {
+      return interaction.reply({
+        content: this.goldService.StringFormatter(
+          `🚫 에러 발생: ` + err.message,
+          TextColor.BOLD_RED,
+          true,
+          true,
+        ),
+      });
+    }
+  }
+
+  @SlashCommand({
+    name: 'alias-add',
+    description: 'add new alias for an item',
+    guilds: ['1284642997375336592', '1273347630767804539'],
+  })
+  public async onAddAlias(
+    @Context() [interaction]: SlashCommandContext,
+    @Options() itemsAliasDTO: ItemsAliasDTO,
+  ) {
+    if (!ALLOWED.has(interaction.user.id)) {
+      await interaction.reply({
+        content: this.goldService.StringFormatter(
+          `🚫 커맨드를 사용할 권한이 없습니다.\n 관리자가 아닐 경우, 데이터 읽기만 가능합니다.\n` +
+            ` 사용자 ID: ${interaction.user.id}`,
+          TextColor.BOLD_RED,
+          true,
+          true,
+        ),
+        flags: 'Ephemeral',
+      });
+      return;
+    }
+
+    try {
+      let result = new ItemTransactionResult();
+      await this.itemsService.AddAlias(itemsAliasDTO, result);
+
+      return interaction.reply({
+        content:
+          this.goldService.StringFormatter(
+            '📦🌟 [아이템 별칭 등록 이벤트 발생 알림]',
+            TextColor.BOLD_WHITE,
+            true,
+            false,
+          ) +
+          '\n' +
+          this.goldService.StringFormatter(
+            `[${result.itemName}]`,
+            this.ColorParser(result.quality),
+            false,
+            false,
+          ) +
+          this.goldService.StringFormatter(
+            `의 별칭`,
+            TextColor.BOLD_WHITE,
+            false,
+            false,
+          ) +
+          this.goldService.StringFormatter(
+            `[${itemsAliasDTO.alias}]`,
+            this.ColorParser(result.quality),
+            false,
+            false,
+          ) +
+          this.goldService.StringFormatter(
+            `(이)가 등록되었다.`,
+            TextColor.BOLD_WHITE,
+            false,
+            true,
+          ),
+      });
+    } catch (err: any) {
+      return interaction.reply({
+        content: this.goldService.StringFormatter(
+          `🚫 잘못된 요청 형식: ` + err.message,
+          TextColor.BOLD_RED,
+          true,
+          true,
+        ),
+      });
+    }
+  }
+
+  @SlashCommand({
+    name: 'alias-delete',
+    description: 'delete existing alias for an item',
+    guilds: ['1284642997375336592', '1273347630767804539'],
+  })
+  public async onAliasDelete(
+    @Context() [interaction]: SlashCommandContext,
+    @Options() ItemsNameDTO: ItemsNameDTO,
+  ) {
+    if (!ALLOWED.has(interaction.user.id)) {
+      await interaction.reply({
+        content: this.goldService.StringFormatter(
+          `🚫 커맨드를 사용할 권한이 없습니다.\n 관리자가 아닐 경우, 데이터 읽기만 가능합니다.\n` +
+            ` 사용자 ID: ${interaction.user.id}`,
+          TextColor.BOLD_RED,
+          true,
+          true,
+        ),
+        flags: 'Ephemeral',
+      });
+      return;
+    }
+
+    try {
+      let result = new ItemTransactionResult();
+      await this.itemsService.DeleteAlias(ItemsNameDTO, result);
+
+      return interaction.reply({
+        content:
+          this.goldService.StringFormatter(
+            '📦🌟 [아이템 별칭 삭제 이벤트 발생 알림]',
+            TextColor.BOLD_WHITE,
+            true,
+            false,
+          ) +
+          '\n' +
+          this.goldService.StringFormatter(
+            `[${result.itemName}]`,
+            this.ColorParser(result.quality),
+            false,
+            false,
+          ) +
+          this.goldService.StringFormatter(
+            `의 별칭`,
+            TextColor.BOLD_WHITE,
+            false,
+            false,
+          ) +
+          this.goldService.StringFormatter(
+            `[${ItemsNameDTO.item_name.trim()}]`,
+            this.ColorParser(result.quality),
+            false,
+            false,
+          ) +
+          this.goldService.StringFormatter(
+            `(이)가 등록 해제되었다.`,
+            TextColor.BOLD_WHITE,
+            false,
+            true,
+          ),
+      });
+    } catch (err: any) {
+      return interaction.reply({
+        content: this.goldService.StringFormatter(
+          `🚫 잘못된 요청 형식: ` + err.message,
+          TextColor.BOLD_RED,
+          true,
+          true,
+        ),
+      });
+    }
+  }
+
+  @SlashCommand({
+    name: 'alias-info',
+    description: `printing currently registered alias`,
+    guilds: ['1284642997375336592', '1273347630767804539'],
+  })
+  public async onAliasInfo(
+    @Context() [interaction]: SlashCommandContext,
+    @Options() itemsPageDTO: ItemsPageDTO,
+  ) {
+    try {
+      const page = await this.itemsService.GetItemAliasPage(itemsPageDTO.page);
+
+      if (itemsPageDTO.page > page.totalPages)
+        throw new BadRequestException(
+          `총 페이지 수(${page.totalPages})보다 큰 값을 입력할 수 없어요.`,
+        );
+
+      const showPrev = page.page > 1;
+      const showNext = page.page < page.totalPages;
+
+      const row = new ActionRowBuilder<ButtonBuilder>();
+      if (showPrev) {
+        row.addComponents(
+          new ButtonBuilder()
+            .setCustomId(`ALIAS_BUTTON/${page.page - 1}`)
+            .setLabel(`${page.page - 1} 페이지`)
+            .setStyle(ButtonStyle.Primary),
+        );
+      }
+      if (showNext) {
+        row.addComponents(
+          new ButtonBuilder()
+            .setCustomId(`ALIAS_BUTTON/${page.page + 1}`)
+            .setLabel(`${page.page + 1} 페이지`)
+            .setStyle(ButtonStyle.Primary),
+        );
+      }
+      return interaction.reply({
+        content: this.itemsService.AliasPageStringBuilder(page),
         components: row.components.length ? [row] : [],
       });
     } catch (err: any) {

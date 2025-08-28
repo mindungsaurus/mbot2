@@ -40,3 +40,9 @@ model Inventory {
 
   @@unique([owner, itemName])
 }
+
+model ItemAlias {
+  id       Int    @id @default(autoincrement())
+  alias    String @unique
+  itemName String
+}

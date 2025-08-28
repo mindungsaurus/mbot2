@@ -245,7 +245,7 @@ export class ItemsComponents {
   }
 
   @Button('INFO_BUTTON/:page')
-  public async onInfoPrevButton(
+  public async onInfoButton(
     @Context() [interaction]: ButtonContext,
     @ComponentParam('page') pageNumString: string,
   ) {
@@ -276,6 +276,52 @@ export class ItemsComponents {
       }
       return interaction.reply({
         content: this.itemsService.InfoPageStringBuilder(page),
+        components: row.components.length ? [row] : [],
+      });
+    } catch (err: any) {
+      return interaction.reply({
+        content: this.goldService.StringFormatter(
+          `🚫 에러 발생: ` + err.message,
+          TextColor.BOLD_RED,
+          true,
+          true,
+        ),
+      });
+    }
+  }
+
+  @Button('ALIAS_BUTTON/:page')
+  public async onAliasButton(
+    @Context() [interaction]: ButtonContext,
+    @ComponentParam('page') pageNumString: string,
+  ) {
+    await interaction.message.delete();
+    try {
+      const pageNum = parseInt(pageNumString);
+      const page = await this.itemsService.GetItemAliasPage(pageNum);
+
+      const showPrev = page.page > 1;
+      const showNext = page.page < page.totalPages;
+
+      const row = new ActionRowBuilder<ButtonBuilder>();
+      if (showPrev) {
+        row.addComponents(
+          new ButtonBuilder()
+            .setCustomId(`ALIAS_BUTTON/${page.page - 1}`)
+            .setLabel(`${page.page - 1} 페이지`)
+            .setStyle(ButtonStyle.Primary),
+        );
+      }
+      if (showNext) {
+        row.addComponents(
+          new ButtonBuilder()
+            .setCustomId(`ALIAS_BUTTON/${page.page + 1}`)
+            .setLabel(`${page.page + 1} 페이지`)
+            .setStyle(ButtonStyle.Primary),
+        );
+      }
+      return interaction.reply({
+        content: this.itemsService.AliasPageStringBuilder(page),
         components: row.components.length ? [row] : [],
       });
     } catch (err: any) {

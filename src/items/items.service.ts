@@ -18,6 +18,7 @@ import stringWidth from 'string-width';
 import { EmbedBuilder } from 'discord.js';
 import { createCanvas, registerFont } from 'canvas';
 import { AttachmentBuilder } from 'discord.js';
+import { ItemsAliasDTO } from './ItemAlias-dto';
 
 export enum ItemQuality {
   NORMAL = 1,
@@ -105,6 +106,22 @@ type ItemInfoPage = {
   hasPrev: boolean;
   hasNext: boolean;
   items: ItemInfoRow[];
+};
+
+type AliasRow = {
+  itemName: string;
+  alias: string;
+  quality: number;
+};
+
+type AliasInfoPage = {
+  page: number;
+  pageSize: number;
+  totalAlias: number;
+  totalPages: number;
+  hasPrev: boolean;
+  hasNext: boolean;
+  alias: AliasRow[];
 };
 
 const PAGE_SIZE = 20;
@@ -197,11 +214,18 @@ export class ItemsService {
       await this.AddItemInventory(player, item, payload.amount);
     } else {
       if (!(await this.FindItemNoSpace(removeWhitespace(item), result))) {
-        result.scenario = 2; //새 등록인 경우 - 시나리오 2
+        if (!(await this.FindItemAlias(item, result))) {
+          //그냥 찾아도 없고 오탈자 체크해도 없고 별칭으로도 없음 => 새 등록인 경우 - 시나리오 2
+          result.scenario = 2;
+        } else {
+          //별칭으로 찾으면 있는 경우 - 처리해줘야 함
+          await this.AddItemInventory(player, result.itemName, payload.amount);
+        }
       }
     }
 
     //오탈자가 문제인 경우 - 시나리오 1
+    //별칭으로 찾으면 있는 경우 - 시나리오 3
     return result;
 
     /*
@@ -297,6 +321,20 @@ export class ItemsService {
     }
   }
 
+  public async FindItemAlias(
+    alias: string,
+    result: ItemTransactionResult,
+  ): Promise<boolean> {
+    const row = await this.prisma.itemAlias.findUnique({
+      where: { alias },
+    });
+
+    if (!row) return false;
+    await this.FindItem(row.itemName, result);
+    result.scenario = 3;
+    return true;
+  }
+
   public async DeleteItemInfo(itemName: string) {
     try {
       await this.prisma.itemsInfo.delete({
@@ -355,7 +393,7 @@ export class ItemsService {
   ): Promise<ItemTransactionResult> {
     const result = new ItemTransactionResult();
     const owner = payload.owner.trim();
-    const itemName = payload.item_name.trim();
+    let itemName = payload.item_name.trim();
     const amount = payload.amount;
     result.owner = owner;
     result.amount = amount;
@@ -391,9 +429,54 @@ export class ItemsService {
           );
         }
 
-        if (await this.FindItemNoSpace(itemName, result)) {
+        if (await this.FindItemNoSpace(removeWhitespace(itemName), result)) {
           //DB에 없고, no-space로 찾으면 있는 경우 - 버튼 인터랙션으로 옮겨줌
           return result;
+        }
+
+        //별칭으로 찾으면 있는 경우 - 인벤토리에 있는지 없는지는 모름
+        if (await this.FindItemAlias(itemName, result)) {
+          itemName = result.itemName; //별칭을 조회 결과의 itemName으로 바꿔줌
+
+          const aliasRes = await this.prisma.inventory.updateMany({
+            where: {
+              owner,
+              itemName,
+              amount: { gte: amount },
+            },
+            data: { amount: { decrement: amount } },
+          });
+
+          const aliasResExists = await this.prisma.inventory.findUnique({
+            where: { owner_itemName: { owner, itemName } },
+            select: { amount: true },
+          });
+
+          if (aliasRes.count === 0) {
+            if (aliasResExists)
+              //갖고는 있는데 수량이 모자란 경우
+              throw new BadRequestException(
+                `보유 수량(${aliasResExists.amount})보다 많이 사용할 수 없어요.`,
+              );
+            else
+              //안 가지고 있는 템인 경우
+              throw new NotFoundException(
+                `[${itemName}] (은)는 ${owner}가 가지고 있지 않은 아이템이에요.`,
+              );
+          } else {
+            //문제 없는 경우, 감소 후 0이면 삭제
+            const after = await this.prisma.inventory.findUnique({
+              where: { owner_itemName: { owner, itemName } },
+              select: { amount: true },
+            });
+
+            if (after && after.amount === 0) {
+              await this.prisma.inventory.delete({
+                where: { owner_itemName: { owner, itemName } },
+              });
+            }
+            return result;
+          }
         }
 
         throw new NotFoundException( //그래도 없는 경우 - 애초에 없는 템임
@@ -556,26 +639,113 @@ export class ItemsService {
     };
   }
 
-  public BuildItemsEmbed(page: ItemInfoPage) {
-    const names = page.items.map((i) => i.name).join('\n') || '—';
-    const qualities =
-      page.items.map((i) => this.QualityNumParser(i.quality)).join('\n') || '—';
-    const types = page.items.map((i) => i.type).join('\n') || '—';
-    const units = page.items.map((i) => i.unit).join('\n') || '—';
+  public async GetItemAliasPage(page: number): Promise<AliasInfoPage> {
+    if (!Number.isInteger(page) || page < 1) {
+      throw new BadRequestException('페이지 수는 1 이상의 정수여야 해요.');
+    }
 
-    return new EmbedBuilder()
-      .setTitle('📦📋 등록 아이템 현황')
-      .setDescription(
-        `총 (${page.totalItems})개 · ${page.page}/${page.totalPages}페이지`,
-      )
-      .addFields(
-        { name: '이름', value: names, inline: true },
-        { name: '등급', value: qualities, inline: true },
-        { name: '\u200B', value: '\u200B', inline: false }, // 줄바꿈 강제
-        { name: '종류', value: types, inline: true },
-        { name: '단위', value: units, inline: true },
-      )
-      .setFooter({ text: `페이지 ${page.page}/${page.totalPages}` });
+    const skip = (page - 1) * PAGE_SIZE;
+
+    // 총 개수 + 현재 페이지 alias 목록
+    const [totalAlias, aliasRows] = await this.prisma.$transaction([
+      this.prisma.itemAlias.count(),
+      this.prisma.itemAlias.findMany({
+        select: { itemName: true, alias: true },
+        orderBy: [{ itemName: 'asc' }, { alias: 'asc' }],
+        skip,
+        take: PAGE_SIZE,
+      }),
+    ]);
+
+    // 해당 페이지에 필요한 아이템들의 quality 한 번에 조회
+    const names = [...new Set(aliasRows.map((a) => a.itemName))];
+    const infos = await this.prisma.itemsInfo.findMany({
+      where: { name: { in: names } },
+      select: { name: true, quality: true },
+    });
+    const qmap = new Map(infos.map((i) => [i.name, i.quality]));
+
+    const alias: AliasRow[] = aliasRows.map((a) => {
+      const q = qmap.get(a.itemName);
+      if (q == null) {
+        throw new NotFoundException(
+          `ItemsInfo에 '${a.itemName}'이(가) 없습니다.`,
+        );
+      }
+      return { itemName: a.itemName, alias: a.alias, quality: q };
+    });
+
+    const totalPages = Math.max(1, Math.ceil(totalAlias / PAGE_SIZE));
+
+    return {
+      page,
+      pageSize: PAGE_SIZE,
+      totalAlias,
+      totalPages,
+      hasPrev: page > 1,
+      hasNext: page < totalPages,
+      alias,
+    };
+  }
+
+  public async AddAlias(payload: ItemsAliasDTO, result: ItemTransactionResult) {
+    let itemName = payload.item_name.trim();
+    const alias = payload.alias.trim();
+
+    const itemExists = await this.FindItem(itemName, result);
+
+    if (!itemExists) {
+      const noSpaceItemExists = await this.FindItemNoSpace(
+        removeWhitespace(itemName),
+        result,
+      );
+      if (!noSpaceItemExists)
+        throw new NotFoundException(
+          `띄어쓰기를 제거한 버전까지 찾아 보았지만, ${itemName}(은)는 등록되지 않은 아이템이에요.`,
+        );
+
+      itemName = result.itemName;
+    }
+
+    try {
+      await this.prisma.itemAlias.create({
+        data: {
+          alias,
+          itemName,
+        },
+      });
+    } catch (err: any) {
+      if (err?.code === 'P2002') {
+        throw new ConflictException(
+          `${alias}(은)는 이미 존재하는 아이템 별칭이에요.`,
+        );
+      }
+      this.logger.error(
+        `Failed to add alias "${alias}": ${err?.message ?? err}`,
+      );
+      throw err;
+    }
+  }
+
+  public async DeleteAlias(
+    payload: ItemsNameDTO,
+    result: ItemTransactionResult,
+  ) {
+    const alias = payload.item_name.trim();
+    try {
+      await this.FindItemAlias(alias, result);
+      await this.prisma.itemAlias.delete({
+        where: { alias },
+      });
+    } catch (err: any) {
+      if (err?.code === 'P2025')
+        throw new NotFoundException(
+          `${alias}(은)는 존재하지 않는 아이템 별칭이에요.`,
+        );
+      throw new InternalServerErrorException(
+        `알 수 없는 이유로 아이템 정보 삭제에 실패했어요.`,
+      );
+    }
   }
 
   public InfoPageStringBuilder(page: ItemInfoPage) {
@@ -634,51 +804,58 @@ export class ItemsService {
           padMono(r.type, W.type, 'left'),
           padMono(toFullWidthAscii(r.unit), W.unit, 'right'),
         ].join('　') + '\n';
-      /*
-      result += [
-        padMono(
-          this.goldService.StringFormatter(
-            `${r.name}\x1b[0m`,
-            color,
-            false,
-            false,
-          ),
-          W.name,
-          'left',
-        ),
-        padMono(
-          this.goldService.StringFormatter(
-            `${qualityString}\x1b[0m`,
-            color,
-            false,
-            false,
-          ),
-          W.quality,
-          'left',
-        ),
-        padMono(
-          this.goldService.StringFormatter(
-            `${r.type}\x1b[0m`,
-            color,
-            false,
-            false,
-          ),
-          W.type,
-          'left',
-        ),
-        padMono(
-          this.goldService.StringFormatter(
-            `${r.unit}\x1b[0m`,
-            color,
-            false,
-            false,
-          ),
-          W.unit,
-          'left',
-        ),
-      ].join(' ');
-      result += '\n';
-      */
+    }
+
+    result += '```';
+    return result;
+  }
+
+  public AliasPageStringBuilder(page: AliasInfoPage) {
+    const W = { name: 20, alias: 20 };
+
+    let result = '';
+
+    result += this.goldService.StringFormatter(
+      `🌟📋 등록 별칭 현황: 총 (${page.totalAlias})개의 별칭, 총 (${page.totalPages})페이지`,
+      TextColor.BOLD_WHITE,
+      true,
+      true,
+    );
+
+    result += '\n```ansi\n';
+    result += this.goldService.StringFormatter(
+      `　현재 (${page.page}/${page.totalPages}) 페이지\n` +
+        ` 　=============\n`,
+      TextColor.BOLD_WHITE,
+      false,
+      false,
+    );
+
+    result +=
+      [
+        padMono('　이름', W.name, 'left'),
+        padMono('　별칭', W.alias, 'left'),
+      ].join('　') + '\n';
+
+    result += '　';
+    result += ['ㅡ'.repeat(W.name), 'ㅡ'.repeat(W.alias)].join('ㅣ') + '\n';
+
+    for (const r of page.alias) {
+      let qualityString = this.QualityNumParser(r.quality);
+      let color = this.ColorParser(qualityString);
+      let colorString = this.goldService.StringFormatter(
+        '',
+        color,
+        false,
+        false,
+      );
+      colorString = replaceSpacesWithFullWidth(colorString);
+      result += colorString;
+      result +=
+        [
+          padMono(toFullWidthAscii(r.itemName), W.name, 'left'),
+          padMono(toFullWidthAscii(r.alias), W.alias, 'left'),
+        ].join('　') + '\n';
     }
 
     result += '```';

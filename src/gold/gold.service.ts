@@ -524,6 +524,7 @@ export class GoldService {
 
       case TextColor.BOLD_GRAY:
         colorParts = '[1;30m';
+        break;
 
       case TextColor.NONE:
         colorParts = '';

@@ -1116,9 +1116,9 @@ export class ItemsService {
       case '진귀':
         return TextColor.BOLD_GRAY;
       case '서사':
-        return TextColor.BOLD_WHITE;
-      case '전설':
         return TextColor.BOLD_RED;
+      case '전설':
+        return TextColor.BOLD_YELLOW;
       case '유일':
         return TextColor.BOLD_GREEN;
       default:

@@ -795,6 +795,34 @@ export class ItemsCommands {
     }
   }
 
+  @SlashCommand({
+    name: 'clean-dummy',
+    description: `cleaning dummy items, which is not registered but in player's inventory`,
+    guilds: ['1284642997375336592', '1273347630767804539'],
+  })
+  public async onCleanDummy(@Context() [interaction]: SlashCommandContext) {
+    try {
+      const result = await this.itemsService.purgeDummyInventory();
+      return interaction.reply({
+        content: this.goldService.StringFormatter(
+          `${result}개의 더미 아이템을 제거했어요.`,
+          TextColor.BOLD_GRAY,
+          true,
+          true,
+        ),
+      });
+    } catch (err: any) {
+      return interaction.reply({
+        content: this.goldService.StringFormatter(
+          `🚫 에러 발생: ` + err.message,
+          TextColor.BOLD_RED,
+          true,
+          true,
+        ),
+      });
+    }
+  }
+
   public ColorParser(quality: String | null): TextColor {
     switch (quality) {
       case '고급':

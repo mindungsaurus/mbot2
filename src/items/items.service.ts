@@ -553,6 +553,22 @@ export class ItemsService {
     return result;
   }
 
+  public async purgeDummyInventory(): Promise<number> {
+    //등록된 아이템 이름 전부 수집
+    const names = (
+      await this.prisma.itemsInfo.findMany({
+        select: { name: true },
+      })
+    ).map((r) => r.name);
+
+    //목록에 없는 itemName만 삭제
+    const { count } = await this.prisma.inventory.deleteMany({
+      where: { itemName: { notIn: names } },
+    });
+
+    return count;
+  }
+
   public async ListPlayerItems(owner: string): Promise<ListedByType> {
     //인벤토리 가져옴
     owner = owner.trim();

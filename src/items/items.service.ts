@@ -664,6 +664,24 @@ export class ItemsService {
     ]);
     const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
 
+    /*
+    const [countRows, items] = await this.prisma.$transaction([
+      this.prisma.$queryRaw<{ count: number }[]>`
+    SELECT COUNT(*)::int AS count
+    FROM "ItemsInfo"
+  `,
+      this.prisma.$queryRaw<ItemInfoRow[]>`
+    SELECT name, quality, unit, type
+    FROM "ItemsInfo"
+    ORDER BY name COLLATE "ko_kr" ASC, id ASC
+    OFFSET ${skip} LIMIT ${PAGE_SIZE}
+  `,
+    ]);
+
+    const totalItems = countRows[0].count;
+    const totalPages = Math.max(1, Math.ceil(totalItems / PAGE_SIZE));
+    */
+
     return {
       page,
       pageSize: PAGE_SIZE,

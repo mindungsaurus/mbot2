@@ -1,7 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { Button, ComponentParam, Context } from 'necord';
 import type { ButtonContext } from 'necord';
-import { ItemsService } from './items.service';
+import {
+  GiveResult,
+  InventorySearchResult,
+  ItemsService,
+} from './items.service';
 import { Inject } from '@nestjs/common';
 import { GoldService, TextColor } from 'src/gold/gold.service';
 import { Logger } from '@nestjs/common';
@@ -62,6 +66,32 @@ export function parseInfoFirstLine(content: string): ParsedInfo | null {
     quality: quality.trim(),
     type: type.trim(),
   };
+}
+
+type ParsedItemTransfer = {
+  from: string;
+  to: string;
+  itemName: string;
+  moved: number;
+  quality: string;
+  unit: string;
+};
+
+export function parseFirstTransferLine(input: string): ParsedItemTransfer {
+  const line = input.split('\n', 1)[0];
+
+  const re =
+    /^-#\s*(.+?)\s*,\s*(.+?)\s*,\s*(.+?)\s*,\s*([-+]?\d+)\s*,\s*(.+?)\s*,\s*(.+?)\s*$/u;
+
+  const m = re.exec(line);
+  if (!m) {
+    throw new Error('헤더 형식이 올바르지 않습니다.');
+  }
+
+  const [, from, to, itemName, movedStr, quality, unit] = m;
+  const moved = Number(movedStr);
+
+  return { from, to, itemName, moved, quality, unit };
 }
 
 @Injectable()
@@ -324,6 +354,103 @@ export class ItemsComponents {
         content: this.itemsService.AliasPageStringBuilder(page),
         components: row.components.length ? [row] : [],
       });
+    } catch (err: any) {
+      return interaction.reply({
+        content: this.goldService.StringFormatter(
+          `🚫 에러 발생: ` + err.message,
+          TextColor.BOLD_RED,
+          true,
+          true,
+        ),
+      });
+    }
+  }
+
+  @Button('YES_BUTTON_ITEM_TRANSFER')
+  public async onYesButtonItemTransfer(
+    @Context() [interaction]: ButtonContext,
+  ) {
+    const info = parseFirstTransferLine(interaction.message.content);
+    await interaction.message.delete();
+    if (!info) {
+      console.warn(`OnYesButtonItemTransfer: 메세지 파싱 실패`);
+      return;
+    }
+
+    let result = new GiveResult();
+    const player = new InventorySearchResult();
+
+    player.owner = info.from;
+    player.itemName = info.itemName;
+    player.amount = -1;
+
+    try {
+      if (await this.itemsService.PlayerHasItem(player)) {
+        if (
+          await this.itemsService.PlayerHasEnoughItem(
+            info.from,
+            info.itemName,
+            info.moved,
+          )
+        ) {
+          await this.itemsService.GiveItem(
+            info.from,
+            info.to,
+            info.itemName,
+            info.moved,
+            result,
+          );
+
+          interaction.reply({
+            content:
+              this.goldService.StringFormatter(
+                `📦 [아이템 전달 이벤트 발생 알림]`,
+                TextColor.BOLD_WHITE,
+                true,
+                false,
+              ) +
+              '\n' +
+              this.goldService.StringFormatter(
+                `「${result.from}」, 「${result.to}」에게 `,
+                TextColor.BOLD_WHITE,
+                false,
+                false,
+              ) +
+              this.goldService.StringFormatter(
+                `[${result.itemName}]`,
+                this.ColorParser(result.quality),
+                false,
+                false,
+              ) +
+              this.goldService.StringFormatter(
+                `를 ${result.moved}${result.unit}만큼 전달하였다.\n`,
+                TextColor.BOLD_WHITE,
+                false,
+                false,
+              ) +
+              this.goldService.StringFormatter(
+                `「${result.from}」, [${result.itemName}]의 남은 수량: ${result.fromRemaining}${result.unit}\n`,
+                TextColor.BOLD_GRAY,
+                false,
+                false,
+              ) +
+              this.goldService.StringFormatter(
+                `「${result.to}」, [${result.itemName}]의 남은 수량: ${result.toTotal}${result.unit}`,
+                TextColor.BOLD_GRAY,
+                false,
+                true,
+              ),
+          });
+        } else {
+          throw new BadRequestException(
+            `보유 수량(${player.amount})보다 많이 전달할 수 없어요.`,
+          );
+        }
+      } else {
+        throw new BadRequestException(
+          `[${info.itemName}](은)는 「${info.from}」(이)가 가지고 있지 않은 아이템이에요.`,
+        );
+      }
     } catch (err: any) {
       return interaction.reply({
         content: this.goldService.StringFormatter(

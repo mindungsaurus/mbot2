@@ -19,6 +19,7 @@ import { EmbedBuilder } from 'discord.js';
 import { createCanvas, registerFont } from 'canvas';
 import { AttachmentBuilder } from 'discord.js';
 import { ItemsAliasDTO } from './ItemAlias-dto';
+import { ItemsTradeInfoDTO } from './ItemsTradeInfo-dto';
 
 export enum ItemQuality {
   NORMAL = 1,
@@ -123,6 +124,25 @@ type AliasInfoPage = {
   hasNext: boolean;
   alias: AliasRow[];
 };
+
+export class GiveResult {
+  itemName: string;
+  from: string;
+  to: string;
+  moved: number;
+  fromRemaining: number;
+  toTotal: number;
+  sourceDeleted: boolean;
+  scenario: number;
+  quality: string;
+  unit: string;
+}
+
+export class InventorySearchResult {
+  owner: string;
+  itemName: string;
+  amount: number;
+}
 
 const PAGE_SIZE = 20;
 
@@ -762,6 +782,209 @@ export class ItemsService {
         `알 수 없는 이유로 아이템 정보 삭제에 실패했어요.`,
       );
     }
+  }
+
+  public async TryGiveItem(payload: ItemsTradeInfoDTO, result: GiveResult) {
+    const fromName = payload.fromName.trim();
+    const toName = payload.toName.trim();
+
+    if (payload.fromName === payload.toName) {
+      throw new BadRequestException(`같은 소유자에게는 전달할 수 없어요.`);
+    }
+
+    if (!Number.isInteger(payload.amount) || payload.amount <= 0) {
+      throw new BadRequestException(`amount는 1 이상의 정수여야 해요.`);
+    }
+
+    if (!ALLOWED_PLAYER.has(fromName) || !ALLOWED_PLAYER.has(toName)) {
+      throw new BadRequestException(`유효하지 않은 플레이어 이름이에요.`);
+    }
+
+    const itemName = payload.itemName.trim();
+    const itemResult = new ItemTransactionResult();
+
+    //일단 DB에 있는 아이템인지 체크
+    if (await this.FindItem(itemName, itemResult)) {
+      //아이템 이름이 정확하게 들어왔을 경우
+      const inventoryExists = await this.prisma.inventory.findUnique({
+        where: { owner_itemName: { owner: fromName, itemName } },
+        select: { amount: true },
+      });
+
+      //있는 아이템이긴 한데 캐릭터가 가지고있진 않은 경우
+      if (!inventoryExists) {
+        throw new BadRequestException(
+          `[${itemName}](은)는 「${fromName}」(이)가 가지고 있지 않은 아이템이에요.`,
+        );
+      }
+
+      //console.log(`TryGiveItem(): GiveItem 직전까지`);
+      //여기까지 왔으면 거래 가능
+      await this.GiveItem(fromName, toName, itemName, payload.amount, result);
+      result.scenario = 0; //처리 없이 한 방에 성공하는 경우
+      return;
+    } else {
+      //no-space로 찾으면 있는 경우 - 정보 저장하고, 버튼 인터랙션으로 옮김
+      if (await this.FindItemNoSpace(removeWhitespace(itemName), itemResult)) {
+        result.from = fromName;
+        result.to = toName;
+        result.moved = payload.amount;
+        result.itemName = itemResult.itemName;
+        result.quality = itemResult.quality as string;
+        result.unit = itemResult.unit as string;
+        result.scenario = 1;
+        return;
+      }
+      //alias로 찾으면 있는 경우 - 그대로 진행해줌
+      if (await this.FindItemAlias(itemName, itemResult)) {
+        const inventoryAliasExists = await this.prisma.inventory.findUnique({
+          where: {
+            owner_itemName: { owner: fromName, itemName: itemResult.itemName },
+          },
+          select: { amount: true },
+        });
+
+        //있는 아이템이긴 한데 캐릭터가 가지고있진 않은 경우
+        if (!inventoryAliasExists) {
+          throw new BadRequestException(
+            `[${itemName}](은)는 「${fromName}」(이)가 가지고 있지 않은 아이템이에요.`,
+          );
+        }
+
+        //여기까지 왔으면 거래 가능 - Alias로 찾은 정보는 itemResult에 있음
+        await this.GiveItem(
+          fromName,
+          toName,
+          itemResult.itemName,
+          payload.amount,
+          result,
+        );
+
+        result.scenario = 3; //alias로 찾은 경우
+        return;
+      }
+
+      //여기까지 왔으면 그냥 없는 아이템이라는 얘기임
+      throw new BadRequestException(
+        `${itemName}은 등록되지 않은 아이템이에요.`,
+      );
+    }
+  }
+
+  public async PlayerHasItem(player: InventorySearchResult) {
+    const exists = await this.prisma.inventory.findUnique({
+      where: {
+        owner_itemName: { owner: player.owner, itemName: player.itemName },
+      },
+      select: { amount: true },
+    });
+
+    if (exists) {
+      player.amount = exists.amount;
+      return true;
+    } else return false;
+  }
+
+  public async PlayerHasEnoughItem(
+    player: string,
+    itemName: string,
+    amount: number,
+  ) {
+    const exists = await this.prisma.inventory.findUnique({
+      where: {
+        owner_itemName: { owner: player, itemName },
+        amount: { gte: amount },
+      },
+      select: { amount: true },
+    });
+
+    if (exists) return true;
+    else return false;
+  }
+
+  //존재가 확정되었을 때 호출하는 함수
+  public async GiveItem(
+    from: string,
+    to: string,
+    itemName: string,
+    amount: number,
+    result: GiveResult,
+  ) {
+    //이런건 TryGiveItem에서 처리
+    /*
+    if (!from || !to || !itemName) {
+      throw new BadRequestException('from, to, itemName은 필수입니다.');
+    }
+    if (from === to) {
+      throw new BadRequestException('같은 소유자에게는 전달할 수 없습니다.');
+    }
+    if (!Number.isInteger(amount) || amount <= 0) {
+      throw new BadRequestException('amount는 1 이상의 정수여야 합니다.');
+    }
+      추가로, 존재하지 않거나 noSpace, 앨리어싱도 그쪽에서 처리
+      */
+
+    //console.log(`GiveItem() 호출됨`);
+    await this.prisma.$transaction(async (tx) => {
+      //from에서 amount만큼 차감 => 부족하면 실패
+      const dec = await tx.inventory.updateMany({
+        where: { owner: from, itemName, amount: { gte: amount } },
+        data: { amount: { decrement: amount } },
+      });
+
+      if (dec.count === 0) {
+        //console.log(`GiveItem(): 탐색 호출전`);
+        const errRow = await this.prisma.inventory.findUniqueOrThrow({
+          where: { owner_itemName: { owner: from, itemName } },
+          select: { amount: true },
+        });
+        //console.log(`GiveItem(): 탐색 호출됨`);
+        throw new BadRequestException(
+          `보유 수량(${errRow.amount})보다 많이 전달할 수 없어요.`,
+        );
+      }
+
+      //남은 수량 0이면 from 행 삭제
+      const delRes = await tx.inventory.deleteMany({
+        where: { owner: from, itemName, amount: 0 },
+      });
+      const sourceDeleted = delRes.count > 0;
+
+      //to에게 amount만큼 증가 - 없으면 생성, 거래 후 잔량 가져옴
+      const toRow = await tx.inventory.upsert({
+        where: { owner_itemName: { owner: to, itemName } },
+        update: { amount: { increment: amount } },
+        create: { owner: to, itemName, amount },
+        select: { amount: true },
+      });
+
+      //전송 후 from 잔량 조회(삭제되었으면 0)
+      const fromAfter = sourceDeleted
+        ? 0
+        : (await tx.inventory.findUnique({
+            where: { owner_itemName: { owner: from, itemName } },
+            select: { amount: true },
+          }))!.amount;
+
+      //여기까지 왔으면 제대로 처리된 것
+      //console.log(`GiveItem(): 정보 처리중`);
+      result.itemName = itemName;
+      result.from = from;
+      result.to = to;
+      result.moved = amount;
+      result.fromRemaining = fromAfter;
+      result.toTotal = toRow.amount;
+      result.sourceDeleted = sourceDeleted;
+
+      //포맷팅에 필요한 정보까지 찾아서 넘겨줌
+      const itemInfo = await this.prisma.itemsInfo.findUniqueOrThrow({
+        where: { name: itemName },
+        select: { quality: true, unit: true },
+      });
+      result.quality = this.QualityNumParser(itemInfo.quality);
+      result.unit = itemInfo.unit;
+      //console.log(`GiveItem(): 아이템 정보 처리중`);
+    });
   }
 
   public InfoPageStringBuilder(page: ItemInfoPage) {

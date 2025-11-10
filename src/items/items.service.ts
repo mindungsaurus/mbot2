@@ -1382,4 +1382,65 @@ export class ItemsService {
         return TextColor.BOLD_WHITE;
     }
   }
+
+  public extractAnsiBlocks(full: string): string[] {
+    // ```ansi ... ``` 블록만 추출 (펜스 포함). 없으면 전체를 하나의 ansi 블록으로 감싼다.
+    const re = /```ansi\b([\s\S]*?)```/gi;
+    const blocks: string[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(full)) !== null) {
+      const inner = m[1]; // 앞뒤 공백은 보존 (블록 그대로 내보내기 위함)
+      blocks.push(this.wrapAnsi(inner));
+    }
+    if (blocks.length === 0) {
+      blocks.push(this.wrapAnsi(full));
+    }
+    return blocks;
+  }
+
+  public wrapAnsi(content: string) {
+    return `\`\`\`ansi\n${content}\n\`\`\``;
+  }
+
+  public packAnsiBlocks(blocks: string[], maxLen = 2000): string[] {
+    const res: string[] = [];
+    let buf = '';
+
+    const pushBuf = () => {
+      if (buf.length > 0) {
+        res.push(buf);
+        buf = '';
+      }
+    };
+
+    for (const b of blocks) {
+      if (b.length > maxLen) {
+        // 요구사항: 블록 내 분할 금지 → 이 경우는 상위 레벨에서 파일 첨부 등으로 처리
+        const preview = b.slice(0, 60).replace(/\n/g, ' ');
+        throw new Error(
+          `단일 ANSI 블록이 ${b.length}자로 2000자 제한을 초과합니다. (미리보기: ${preview}...)`,
+        );
+      }
+
+      if (buf.length === 0) {
+        // 버퍼가 비어있으면 그냥 시작
+        buf = b;
+        continue;
+      }
+
+      // 블록 사이 구분용 줄바꿈 1줄 추가(선택). 없다면 ''로 바꿔도 됨.
+      const sep = '\n';
+      const candidateLen = buf.length + sep.length + b.length;
+
+      if (candidateLen <= maxLen) {
+        buf += sep + b;
+      } else {
+        pushBuf();
+        buf = b;
+      }
+    }
+
+    pushBuf();
+    return res;
+  }
 }

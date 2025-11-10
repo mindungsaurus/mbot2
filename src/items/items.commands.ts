@@ -543,9 +543,34 @@ export class ItemsCommands {
       gold,
     );
 
-    return interaction.reply({
-      content: result,
-    });
+    const blocks = this.itemsService.extractAnsiBlocks(result);
+    let payloads: string[];
+
+    try {
+      payloads = this.itemsService.packAnsiBlocks(blocks, 2000);
+      await interaction.reply({
+        content: payloads[0],
+      });
+
+      for (let i = 1; i < payloads.length; i++) {
+        await interaction.followUp({
+          content: payloads[i],
+        });
+      }
+    } catch (err: any) {
+      const msg = err?.message ?? '요청 처리 중 서버 내부 오류가 발생했어요.';
+
+      // 이미 reply했는지에 따라 분기
+      if (interaction.deferred || interaction.replied) {
+        await interaction
+          .followUp({ content: `🚫 ${msg}`, ephemeral: true })
+          .catch(() => {});
+      } else {
+        await interaction
+          .reply({ content: `🚫 ${msg}`, ephemeral: true })
+          .catch(() => {});
+      }
+    }
   }
 
   @SlashCommand({

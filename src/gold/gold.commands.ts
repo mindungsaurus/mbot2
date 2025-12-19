@@ -43,6 +43,17 @@ export class GoldCommands {
   }
 
   @SlashCommand({
+    name: 'taunt',
+    description: `ha-ha`,
+    guilds: ['1284642997375336592', '1273347630767804539'],
+  })
+  public async onTaunt(@Context() [interaction]: SlashCommandContext) {
+    return interaction.reply({
+      content: `_인간 시대의 끝이 도래했다._`,
+    });
+  }
+
+  @SlashCommand({
     name: 'register',
     description: 'register pc or npc to the DB',
     guilds: ['1284642997375336592', '1273347630767804539'],

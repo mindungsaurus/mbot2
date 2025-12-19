@@ -32,7 +32,7 @@ export class DiceCommands {
     @Options() dto: DiceExprDTO,
   ) {
     try {
-      const r = this.diceService.rollExpression(dto.expr);
+      const r = this.diceService.rollExpression(dto.expr, { sort: dto.sort });
       return interaction.reply({
         content: this.diceService.formatResult(r),
       });

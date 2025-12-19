@@ -85,7 +85,7 @@ export class DiceService {
   // -------------------------
   // 1) 기존: 실제 굴림 + 펼친 식 반환
   // -------------------------
-  rollExpression(input: string): DiceRollResult {
+  rollExpression(input: string, options?: { sort?: boolean }): DiceRollResult {
     try {
       const expr = (input ?? '').trim();
       if (!expr) throw new Error('Expression is empty.');
@@ -100,10 +100,14 @@ export class DiceService {
         rolled.diceFacesByAppearance,
       );
 
+      const dice = options?.sort
+        ? [...rolled.allRolls].sort((a, b) => b - a) // 내림차순
+        : rolled.allRolls;
+
       return {
         input: expr,
         expanded,
-        dice: rolled.allRolls,
+        dice,
         total: rolled.value,
       };
     } catch (e) {

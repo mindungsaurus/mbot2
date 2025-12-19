@@ -1,4 +1,4 @@
-import { IntegerOption, StringOption } from 'necord';
+import { BooleanOption, IntegerOption, StringOption } from 'necord';
 
 export class DiceExprDTO {
   @StringOption({
@@ -7,4 +7,11 @@ export class DiceExprDTO {
     required: true,
   })
   expr: string;
+
+  @BooleanOption({
+    name: 'sort',
+    description: 'sort individual dice rolls in the output',
+    required: false,
+  })
+  sort?: boolean;
 }

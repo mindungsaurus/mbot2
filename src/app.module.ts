@@ -7,6 +7,7 @@ import { IntentsBitField } from 'discord.js';
 import { GoldModule } from './gold/gold.module';
 import { ItemsModule } from './items/items.module';
 import { DiceModule } from './dice/dice.module';
+import { EncounterModule } from './encounter/encounter.module';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { DiceModule } from './dice/dice.module';
     GoldModule,
     ItemsModule,
     DiceModule,
+    EncounterModule,
   ],
   controllers: [AppController],
   providers: [AppService],

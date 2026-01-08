@@ -1,0 +1,126 @@
+{
+  "id": "demo",
+  "updatedAt": "2026-01-08T17:35:51.704Z",
+  "units": [
+    {
+      "id": "namuA",
+      "side": "TEAM",
+      "name": "(나무A)",
+      "hp": {
+        "cur": 20,
+        "max": 20,
+        "temp": 5
+      },
+      "tags": [],
+      "colorCode": 32,
+      "pos": {
+        "x": -3,
+        "z": 0
+      },
+      "mods": [],
+      "acBase": 15,
+      "integrityBase": 5
+    },
+    {
+      "id": "xenon",
+      "side": "TEAM",
+      "name": "제논",
+      "hp": {
+        "cur": 0,
+        "max": 41
+      },
+      "tags": [
+        "위압됨",
+        "사냥꾼의 표식",
+        "출혈"
+      ],
+      "colorCode": 31,
+      "mods": [],
+      "acBase": 13,
+      "pos": {
+        "x": -3,
+        "z": 0
+      }
+    },
+    {
+      "id": "bard",
+      "side": "ENEMY",
+      "name": "전승바드",
+      "note": "전승바드 : 방호의 서곡 , 고양의 합악",
+      "tags": [],
+      "colorCode": 30,
+      "pos": {
+        "x": -2,
+        "z": 1
+      },
+      "mods": []
+    },
+    {
+      "id": "war",
+      "side": "ENEMY",
+      "name": "레벨5 워리어",
+      "hp": {
+        "cur": 10,
+        "max": 43
+      },
+      "tags": [
+        "실명"
+      ],
+      "colorCode": 31,
+      "pos": {
+        "x": -1,
+        "z": 0
+      },
+      "mods": [],
+      "acBase": 14
+    }
+  ],
+  "turnOrder": [
+    {
+      "kind": "label",
+      "text": "레나"
+    },
+    {
+      "kind": "label",
+      "text": "무리사냥꾼"
+    },
+    {
+      "kind": "unit",
+      "unitId": "xenon"
+    },
+    {
+      "kind": "unit",
+      "unitId": "war"
+    }
+  ],
+  "turnIndex": 3,
+  "markers": [
+    {
+      "id": "stair_left",
+      "kind": "MARKER",
+      "name": "(계단)",
+      "pos": {
+        "x": -2,
+        "z": 0
+      }
+    },
+    {
+      "id": "stair_left_2nd",
+      "kind": "MARKER",
+      "name": "(계단)",
+      "pos": {
+        "x": -2,
+        "z": 1
+      }
+    },
+    {
+      "id": "fire",
+      "kind": "MARKER",
+      "name": "🔥",
+      "pos": {
+        "x": -3,
+        "z": 0
+      }
+    }
+  ]
+}

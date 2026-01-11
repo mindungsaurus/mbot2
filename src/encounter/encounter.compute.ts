@@ -1,3 +1,4 @@
+//encounter.compute.ts
 import { getPreset } from './encounter.presets';
 import { Unit } from './encounter.types';
 
@@ -58,39 +59,93 @@ export function getComputedIntegrity(u: Unit): number | undefined {
 }
 
 /**
- * ✅ 렌더용 태그: 수동 tags + mod.tagsAdd
- * - 스택형은 "(설한 x3)" 같이 보이게, tagsAdd가 포함하는 태그에 xN을 붙여줌
- * - 같은 태그가 여러 모드에서 나오면 중복 제거
+ * ✅ 렌더용 태그:
+ * - 수동 tags
+ * - mod.tagsAdd (프리셋 토글/스택)
+ * - turn tagStates (스택 + 옵션)  ← 신규
+ *
+ * 정책:
+ * - 같은 태그명이 여러 소스에서 나오면 1개로 합침
+ * - 스택형(=stacks가 있는 태그)은 항상 "태그 xN" 형태로 표시 (x1도 표시)
+ * - 동일 태그가 여러 스택 소스에서 나오면 stacks는 "최댓값"으로 합침
  */
 export function getDisplayTags(u: Unit): string[] {
+  const order: string[] = [];
+  const bag = new Map<string, { stacks?: number }>();
+
+  const MAX_STACKS = 999;
+
+  function clampStacks(v: any): number {
+    const n = Math.floor(Number(v));
+    if (!Number.isFinite(n)) return 0;
+    return Math.max(0, Math.min(MAX_STACKS, n));
+  }
+
+  function addTag(raw: any, stacks?: number) {
+    const key = (raw ?? '').trim();
+    if (!key) return;
+
+    if (!bag.has(key)) {
+      bag.set(key, {});
+      order.push(key);
+    }
+
+    if (stacks !== undefined) {
+      const s = Math.max(1, clampStacks(stacks));
+      const cur = bag.get(key)!;
+      cur.stacks = cur.stacks === undefined ? s : Math.max(cur.stacks, s);
+    }
+  }
+
+  // 1) manual tags
   const manual = Array.isArray(u.tags) ? u.tags : [];
+  for (const t of manual) addTag(t);
+
+  // 2) mods tagsAdd
   const mods = u.mods ?? [];
-
-  const fromMods: string[] = [];
-
   for (const m of mods) {
     const tags = (m.tagsAdd ?? []).map((t) => (t ?? '').trim()).filter(Boolean);
     if (tags.length === 0) continue;
 
-    // preset kind 판별(정의가 없으면 토글 취급)
     let kind: 'toggle' | 'stack' = 'toggle';
     try {
       kind = getPreset(m.key).kind;
-    } catch {}
-
-    const stacks = Math.max(1, Math.floor(m.stacks ?? 1));
+    } catch {
+      // 정의 없으면 toggle 취급
+    }
 
     if (kind === 'stack') {
-      // ✅ 스택형: 첫 태그에만 xN (x1도 표시해서 토글/스택 구분 가능)
-      fromMods.push(`${tags[0]} x${stacks}`);
-      for (const t of tags.slice(1)) fromMods.push(t);
+      const stacks = Math.max(1, clampStacks(m.stacks ?? 1));
+      // 스택형: 첫 태그에 xN
+      addTag(tags[0], stacks);
+      // 나머지는 일반 태그
+      for (const t of tags.slice(1)) addTag(t);
     } else {
-      // ✅ 토글형: xN 없음
-      for (const t of tags) fromMods.push(t);
+      // 토글형: 전부 일반 태그
+      for (const t of tags) addTag(t);
     }
   }
 
-  return uniq([...manual, ...fromMods]);
+  // 3) turn-based tagStates (신규)
+  const ts = (u as any).tagStates as
+    | Record<string, { stacks: number }>
+    | undefined;
+
+  if (ts && typeof ts === 'object') {
+    for (const [tag, st] of Object.entries(ts)) {
+      const stacks = Math.max(1, clampStacks(st?.stacks ?? 1));
+      addTag(tag, stacks); // 턴태그는 스택형이므로 항상 xN 표시
+    }
+  }
+
+  // 4) build output
+  return order
+    .map((k) => {
+      const it = bag.get(k);
+      if (it?.stacks !== undefined) return `${k} x${it.stacks}`;
+      return k;
+    })
+    .filter(Boolean);
 }
 
 export function isPresetActive(u: Unit, presetId: string): boolean {

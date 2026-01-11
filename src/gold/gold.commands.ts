@@ -8,12 +8,18 @@ import { Context, SlashCommand, Options } from 'necord';
 import type { SlashCommandContext } from 'necord';
 import { CharacterGoldDTO } from './CharacterGold-dto';
 import { CharacterInfoDTO } from './CharacterInfo-dto';
-import { GiveGoldResult, GoldService, TextColor } from './gold.service';
+import {
+  GiveGoldResult,
+  GoldService,
+  TextColor,
+  SetNpcFriendResult,
+} from './gold.service';
 import { CharacterNameDTO } from './CharacterName-dto';
 import { CharacterGold } from '@prisma/client';
 import { InteractionResponse } from 'discord.js';
 import { ExpenseResult } from './gold.service';
 import { CharacterGoldTransactionDTO } from './CharacterGoldTransaction-dto';
+import { NpcFriendDTO } from './NpcFriend-dto';
 
 export const ALLOWED = new Set<string>([
   '1166898785360810014',
@@ -50,6 +56,17 @@ export class GoldCommands {
   public async onTaunt(@Context() [interaction]: SlashCommandContext) {
     return interaction.reply({
       content: `_인간 시대의 끝이 도래했다._`,
+    });
+  }
+
+  @SlashCommand({
+    name: 'taunt2',
+    description: `ha-ha`,
+    guilds: ['1284642997375336592', '1273347630767804539'],
+  })
+  public async onTaunt2(@Context() [interaction]: SlashCommandContext) {
+    return interaction.reply({
+      content: `_오, 인간.. 나라면 그런 선택은 하지 않았을 것이다._`,
     });
   }
 
@@ -109,6 +126,83 @@ export class GoldCommands {
         ) +
         `\n-# Tip: PC거나, 동료가 아닌 NPC의 경우 /set-day를 활용해 일자를 맞춰보세요.` +
         `\n-# Tip2: 동료 NPC의 경우, /day-sync [PC이름]을 활용해 일자를 동기화해보세요.`,
+    });
+  }
+
+  @SlashCommand({
+    name: 'set-friend',
+    description: 'change npc companion owner (or clear it)',
+    guilds: ['1284642997375336592', '1273347630767804539'],
+  })
+  public async onSetNpcFriend(
+    @Context() [interaction]: SlashCommandContext,
+    @Options() npcFriendDTO: NpcFriendDTO,
+  ) {
+    if (!ALLOWED.has(interaction.user.id)) {
+      await interaction.reply({
+        content: this.goldService.StringFormatter(
+          `🚫 커맨드를 사용할 권한이 없습니다.\n 관리자가 아닐 경우, 데이터 읽기만 가능합니다.\n` +
+            ` 사용자 ID: ${interaction.user.id}`,
+          TextColor.BOLD_RED,
+          true,
+          true,
+        ),
+        flags: 'Ephemeral',
+      });
+      return;
+    }
+
+    let result;
+    try {
+      result = await this.goldService.SetNpcFriend({
+        npc: npcFriendDTO.npc,
+        friend: npcFriendDTO.friend,
+      });
+    } catch (err: any) {
+      let errString = '🚫 알 수 없는 에러가 발생했습니다.';
+      if (err instanceof NotFoundException) {
+        errString = '🚫 제시된 캐릭터 이름이 유효하지 않습니다.';
+      } else if (err instanceof BadRequestException) {
+        errString =
+          '🚫 NPC만 동료 관계를 가질 수 있거나, friend가 PC가 아니거나, 입력이 잘못되었습니다.';
+      } else if (err instanceof InternalServerErrorException) {
+        errString = '🚫 서버 에러가 발생했습니다. 만든 사람한테 따져보세요.';
+      }
+
+      return interaction.reply({
+        content: this.goldService.StringFormatter(
+          errString,
+          TextColor.BOLD_RED,
+          true,
+          true,
+        ),
+      });
+    }
+
+    const prev = result.prevFriend ?? '없음';
+    const cur = result.curFriend ?? '없음';
+
+    const tip =
+      result.curFriend !== null
+        ? `\n-# Tip: 동료를 바꿨으면 /day-sync ${result.curFriend} 로 날짜 동기화도 고려해보세요.`
+        : '';
+
+    return interaction.reply({
+      content:
+        this.goldService.StringFormatter(
+          '👥 [NPC 동료 관계 수정 이벤트 발생 알림]',
+          TextColor.BOLD_WHITE,
+          true,
+          false,
+        ) +
+        '\n' +
+        this.goldService.StringFormatter(
+          `「${result.npc}」의 동료: ${prev} → ${cur}`,
+          TextColor.BOLD_BLUE,
+          false,
+          true,
+        ) +
+        tip,
     });
   }
 

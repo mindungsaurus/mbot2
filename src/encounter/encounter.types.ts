@@ -1,4 +1,5 @@
-export type Side = 'TEAM' | 'ENEMY';
+// encounter.types.ts
+export type Side = 'TEAM' | 'ENEMY' | 'NEUTRAL';
 
 export interface Hp {
   cur: number;
@@ -8,11 +9,6 @@ export interface Hp {
 
 /**
  * mods: 프리셋/버프 효과는 여기로만 (되돌리기 쉬움)
- * - key: presetId
- * - stacks: 스택형일 때만 의미(0이면 보통 제거)
- * - acDelta: "총합 변화량" (스택 변화 시 preset이 재계산해서 넣어줌)
- * - integritySet: "총합/설정값" (여러 모드 중 max)
- * - tagsAdd: 이 모드가 제공하는 태그들(표시용). 스택 표시는 렌더에서 xN으로 붙임.
  */
 export interface UnitMod {
   key: string;
@@ -31,6 +27,13 @@ export type Marker = {
   pos: Pos;
 };
 
+/** 턴 기반 태그(스택/옵션) */
+export interface TurnTagState {
+  stacks: number; // >= 1
+  decOnTurnStart?: boolean; // 옵션1: 자신의 턴이 "올 때" 감소
+  decOnTurnEnd?: boolean; // 옵션2: 자신의 턴이 "끝날 때" 감소
+}
+
 export interface Unit {
   id: string;
   side: Side;
@@ -43,6 +46,12 @@ export interface Unit {
 
   // 수동 태그(오퍼레이터가 직접 붙이는 것)
   tags: string[];
+
+  // 턴 기반 태그(스택/옵션)
+  tagStates?: Record<string, TurnTagState>;
+
+  /** formation 등에서 사용할 별칭(옵션) */
+  alias?: string;
 
   // 프리셋/버프(토글/스택)는 여기에만
   mods?: UnitMod[];
@@ -66,13 +75,54 @@ export interface EncounterState {
   markers?: Marker[];
   turnOrder: TurnEntry[];
   turnIndex: number;
+
+  /** @deprecated (구버전 호환용) */
   formationLines?: string[];
+
   updatedAt: string;
 
-  // 추가: encounter별 기본 publish 채널
+  /** 라운드 카운트 (1부터) */
+  round: number;
+
+  /** 임시 턴(중첩 가능). 마지막이 현재 임시 턴 유닛 */
+  tempTurnStack?: string[];
+
+  logs?: EncounterLogEntry[];
+
+  // encounter별 기본 publish 채널
   publish?: {
     channelId?: string;
   };
+}
+
+export type LogKind =
+  | 'ACTION'
+  | 'TURN_END'
+  | 'TURN_START'
+  | 'TEMP_TURN_START'
+  | 'TEMP_TURN_END'
+  | 'TURN_RESUME';
+
+export interface EncounterLogTurnCtx {
+  round: number;
+  isTemp: boolean;
+  unitId: string | null;
+  unitName: string | null;
+}
+
+export interface EncounterLogEntry {
+  id: string;
+  at: string; // ISO timestamp
+  kind: LogKind;
+
+  // 구조화된 컨텍스트 (UI에서 뱃지/필터링에 유용)
+  ctx: EncounterLogTurnCtx;
+
+  // 사람이 읽는 문자열 (예시처럼 prefix 포함)
+  line: string;
+
+  // UI가 상세 렌더링할 수 있게 원본 액션도 같이 저장(선택)
+  action?: Action;
 }
 
 // ---------- PATCH ----------
@@ -83,6 +133,15 @@ export interface HpPatch {
   cur?: NumPatch;
   max?: number;
   temp?: NumPatch | null;
+}
+
+// tagStates용 patch
+export type TagStacksPatch = number | { delta: number } | null;
+
+export interface TurnTagPatch {
+  stacks?: TagStacksPatch; // null 또는 <=0이면 제거
+  decOnTurnStart?: boolean;
+  decOnTurnEnd?: boolean;
 }
 
 export interface TagsPatch {
@@ -99,17 +158,13 @@ export interface UnitPatch {
   ac?: NumPatch | null; // base AC 수정
   integrity?: NumPatch | null; // base integrity 수정
   hp?: HpPatch | null;
+
   tags?: TagsPatch; // 수동 태그만
+  tagStates?: Record<string, TurnTagPatch | null>; // 턴 기반 태그 patch
+
   note?: string | null;
   colorCode?: number | null;
-  /**
-   * PATCH로 프리셋(토글/스택) 조작
-   * - null: 해제(모드 제거)
-   * - number: stacks를 그 값으로 "설정" (0이면 해제)
-   * - {delta}: stacks를 상대 증감
-   *
-   * 토글형은 stacks>0이면 enabled로 취급(항상 stacks=1로 저장)
-   */
+
   presetStacks?: Record<string, StackPatch>;
 }
 
@@ -127,12 +182,6 @@ export type Action =
   | { type: 'TOGGLE_TAG'; unitId: string; tag: string }
   | { type: 'NEXT_TURN' }
   | { type: 'PATCH_UNIT'; unitId: string; patch: UnitPatch }
-
-  /**
-   * 토글형/스택형 공통: enabled 미지정이면 toggle
-   * - 토글형: enabled=true면 적용(=stacks=1), false면 해제(제거)
-   * - 스택형: enabled=true면 stacks를 최소 1(defaultStacks)로, false면 제거
-   */
   | {
       type: 'SET_PRESET';
       presetId: string;
@@ -140,13 +189,6 @@ export type Action =
       enabled?: boolean;
       args?: Record<string, any>;
     }
-
-  /**
-   * 스택형 전용: delta만큼 스택 증감
-   * - 결과 stacks가 0이면 제거(해제)
-   * - 0..999로 클램프
-   * - 토글형 프리셋에 쓰면 no-op(안전)
-   */
   | {
       type: 'ADJUST_PRESET_STACK';
       presetId: string;
@@ -163,4 +205,19 @@ export type Action =
       x: number;
       z: number;
     }
-  | { type: 'REMOVE_MARKER'; markerId: string };
+  | { type: 'REMOVE_MARKER'; markerId: string }
+  | {
+      type: 'CREATE_UNIT';
+      name: string;
+      alias?: string;
+      side: Side;
+      x: number;
+      z: number;
+      hpMax: number;
+      acBase: number;
+      colorCode?: number;
+      turnOrderIndex: number; // turnOrder 삽입 위치(0-based)
+    }
+  | { type: 'REMOVE_UNIT'; unitId: string }
+  | { type: 'GRANT_TEMP_TURN'; unitId: string }
+  | { type: 'MOVE_TURN_ENTRY'; fromIndex: number; toIndex: number };

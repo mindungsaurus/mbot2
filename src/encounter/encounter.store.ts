@@ -60,6 +60,7 @@ export class EncounterStore {
         '(드릴씨)                                              (the크라운)',
         '(나무A)--3--레나,텐트리--3--제논--3--워리어,무리---3(-----6----티아)---3---세토,괴수,바드,정령',
       ],
+      round: 1,
     };
 
     this.map.set(sample.id, sample);

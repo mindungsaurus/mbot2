@@ -53,6 +53,12 @@ export class EncounterController {
     await this.publisher.sendAnsiToChannel(channelId, ansi); // ✅ 항상 새 메시지
     return { ok: true, channelId };
   }
+
+  // undo: 마지막 apply(요청 1번) 되돌리기
+  @Post(':id/undo')
+  async undo(@Param('id') id: string) {
+    return this.encounter.undo(id);
+  }
 }
 
 function sanitizeChannelId(input?: string): string {

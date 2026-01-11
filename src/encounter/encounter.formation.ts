@@ -1,3 +1,4 @@
+//encounter.formation.ts
 import { EncounterState } from './encounter.types';
 
 const CELL_M = 3;
@@ -15,7 +16,7 @@ export function buildFormationLines(state: EncounterState): string[] {
     if (!u.pos) continue;
     const z = u.pos.z;
     const arr = byZ.get(z) ?? [];
-    arr.push({ x: u.pos.x, label: u.name });
+    arr.push({ x: u.pos.x, label: u.alias ?? u.name });
     byZ.set(z, arr);
   }
 

@@ -52,6 +52,12 @@ export class GiveGoldResult {
   amount: number;
 }
 
+export class SetNpcFriendResult {
+  npc: string;
+  prevFriend: string | null;
+  curFriend: string | null;
+}
+
 @Injectable()
 export class GoldService {
   private readonly logger = new Logger(GoldService.name);
@@ -82,6 +88,86 @@ export class GoldService {
         `Failed to register character "${name}": ${err?.message ?? err}`,
       );
       throw err;
+    }
+  }
+
+  public async SetNpcFriend(payload: {
+    npc: string;
+    friend?: string | null;
+  }): Promise<SetNpcFriendResult> {
+    const npcName = (payload.npc ?? '').trim();
+    if (!npcName) throw new BadRequestException('npc is required');
+
+    const rawFriend = (payload.friend ?? '').trim();
+
+    // friend 정규화: 비었으면 null 처리 + 간단한 키워드도 null 처리
+    const lowered = rawFriend.toLowerCase();
+    const nextFriend =
+      !rawFriend ||
+      lowered === 'none' ||
+      lowered === 'null' ||
+      rawFriend === '-' ||
+      rawFriend === '없음'
+        ? null
+        : rawFriend;
+
+    const npcRow = await this.prisma.characterGold.findUnique({
+      where: { name: npcName },
+      select: { id: true, name: true, isNpc: true, friend: true },
+    });
+
+    if (!npcRow) {
+      throw new NotFoundException(`Character "${npcName}" not found`);
+    }
+    if (!npcRow.isNpc) {
+      throw new BadRequestException(`"${npcName}" is not an NPC`);
+    }
+
+    const prevFriend =
+      npcRow.friend && npcRow.friend.trim().length > 0
+        ? npcRow.friend.trim()
+        : null;
+
+    if (nextFriend !== null) {
+      if (nextFriend === npcName) {
+        throw new BadRequestException('npc cannot be friend of itself');
+      }
+
+      const friendRow = await this.prisma.characterGold.findUnique({
+        where: { name: nextFriend },
+        select: { name: true, isNpc: true },
+      });
+
+      if (!friendRow) {
+        throw new NotFoundException(`Character "${nextFriend}" not found`);
+      }
+      if (friendRow.isNpc) {
+        throw new BadRequestException('friend must be a PC (not NPC)');
+      }
+    }
+
+    try {
+      const updated = await this.prisma.characterGold.update({
+        where: { id: npcRow.id },
+        data: { friend: nextFriend },
+        select: { friend: true },
+      });
+
+      const curFriend =
+        updated.friend && updated.friend.trim().length > 0
+          ? updated.friend.trim()
+          : null;
+
+      return {
+        npc: npcRow.name,
+        prevFriend,
+        curFriend,
+      };
+    } catch (err: any) {
+      this.logger.error(
+        `SetNpcFriend error for "${npcName}": ${err?.message ?? err}`,
+      );
+      throw new InternalServerErrorException('Failed to set npc friend');
     }
   }
 

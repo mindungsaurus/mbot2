@@ -1,3 +1,4 @@
+// encounter.actions.ts
 import {
   Action,
   EncounterState,
@@ -5,6 +6,11 @@ import {
   UnitPatch,
   NumPatch,
   UnitMod,
+  TurnEntry,
+  TagStacksPatch,
+  Side,
+  EncounterLogEntry,
+  LogKind,
 } from './encounter.types';
 import {
   getComputedIntegrity,
@@ -12,9 +18,19 @@ import {
   getBaseIntegrity,
 } from './encounter.compute';
 import { getPreset } from './encounter.presets';
+import { randomUUID } from 'crypto';
 
 const MAX_STACKS_GLOBAL = 999;
+const MAX_TAG_STACKS = 999;
 const MAX_ABS_POS = 10000;
+const MAX_LOGS = 500;
+
+type TurnTagDecayChange = {
+  tag: string;
+  from: number;
+  to: number;
+  when: 'start' | 'end';
+};
 
 function normPos(v: any): number {
   const n = Math.floor(Number(v));
@@ -46,84 +62,354 @@ export function applyActionInPlace(
 ): void {
   switch (action.type) {
     case 'APPLY_DAMAGE': {
+      const ctx = makeLogCtx(state);
       const u = findUnit(state, action.unitId);
       normalizeUnit(u);
       if (!u.hp) return;
 
       const amount = Math.max(0, Math.floor(action.amount));
-      const integrity = getComputedIntegrity(u) ?? 0;
+      if (amount === 0) return;
 
-      if (integrity > 0 && amount < integrity) return;
-
+      // 룰 판단 제거: 무결성/감소 무시 같은 규칙은 프론트(오퍼레이터)가 결정
       let remaining = amount;
 
-      const temp = u.hp.temp ?? 0;
-      if (temp > 0) {
-        const used = Math.min(temp, remaining);
-        const newTemp = temp - used;
+      // 1) 임시HP부터 소모
+      const tempBefore = u.hp.temp ?? 0;
+      if (tempBefore > 0) {
+        const used = Math.min(tempBefore, remaining);
+        const tempAfter = tempBefore - used;
         remaining -= used;
-        if (newTemp > 0) u.hp.temp = newTemp;
+
+        if (tempAfter > 0) u.hp.temp = tempAfter;
         else delete u.hp.temp;
       }
 
-      if (remaining > 0) u.hp.cur = Math.max(0, u.hp.cur - remaining);
+      // 2) 남으면 현재 HP 감소
+      const hpBefore = u.hp.cur;
+      if (remaining > 0) {
+        u.hp.cur = Math.max(0, u.hp.cur - remaining);
+      }
+      const hpAfter = u.hp.cur;
+
+      // 로그를 좀 더 정보성 있게
+      const tempAfter = u.hp.temp ?? 0;
+      const usedTemp = Math.max(0, tempBefore - tempAfter);
+      const usedHp = Math.max(0, hpBefore - hpAfter);
+
+      pushLog(
+        state,
+        'ACTION',
+        `${unitLabel(state, action.unitId)} 피해 ${amount} (임시HP -${usedTemp}, HP -${usedHp}).`,
+        action,
+        ctx,
+      );
       return;
     }
 
     case 'HEAL': {
+      const ctx = makeLogCtx(state);
       const u = findUnit(state, action.unitId);
       normalizeUnit(u);
       if (!u.hp) return;
 
       const amount = Math.max(0, Math.floor(action.amount));
       u.hp.cur = Math.min(u.hp.max, Math.max(0, u.hp.cur + amount));
+      pushLog(
+        state,
+        'ACTION',
+        `${unitLabel(state, action.unitId)}에게 ${amount}의 회복.`,
+        action,
+        ctx,
+      );
       return;
     }
 
     case 'SET_TEMP_HP': {
+      const ctx = makeLogCtx(state);
       const u = findUnit(state, action.unitId);
       normalizeUnit(u);
       if (!u.hp) return;
 
+      const before = u.hp.temp ?? 0;
+
       const temp = Math.max(0, Math.floor(action.temp));
       const mode = action.mode ?? 'normal';
-
       const curTemp = u.hp.temp ?? 0;
 
       if (mode === 'normal') {
-        // ✅ 룰: 더 큰 값만 갱신, 0으로 삭제는 force에서만
+        // 룰: 더 큰 값만 갱신, 0으로 삭제는 force에서만
         if (temp === 0) return;
         if (temp <= curTemp) return;
       }
 
       if (temp <= 0) delete u.hp.temp;
       else u.hp.temp = temp;
+      const after = u.hp.temp ?? 0;
+      if (after !== before) {
+        if (after > before) {
+          pushLog(
+            state,
+            'ACTION',
+            `${unitLabel(state, action.unitId)} 임시HP ${after} 획득 (이전 ${before}).`,
+            action,
+            ctx,
+          );
+        } else {
+          pushLog(
+            state,
+            'ACTION',
+            `${unitLabel(state, action.unitId)} 임시HP ${before} → ${after}.`,
+            action,
+            ctx,
+          );
+        }
+      }
       return;
     }
 
     case 'TOGGLE_TAG': {
+      const ctx = makeLogCtx(state);
+
       const u = findUnit(state, action.unitId);
       normalizeUnit(u);
       const tag = (action.tag ?? '').trim();
       if (!tag) return;
 
+      const had = u.tags.includes(tag);
+
       const idx = u.tags.findIndex((t) => t === tag);
       if (idx >= 0) u.tags.splice(idx, 1);
       else u.tags.push(tag);
+
+      pushLog(
+        state,
+        'ACTION',
+        `${unitLabel(state, action.unitId)} 태그 '${tag}' ${had ? '제거' : '추가'}.`,
+        action,
+        ctx,
+      );
+      return;
+    }
+
+    case 'GRANT_TEMP_TURN': {
+      const ctxBefore = makeLogCtx(state);
+      const id = (action.unitId ?? '').trim();
+      if (!id) return;
+
+      // 유닛 존재 확인
+      const target = findUnit(state, id);
+      normalizeUnit(target);
+
+      const activeId = getActiveTurnUnitId(state);
+      if (activeId === id) return; // 이미 현재 턴 주체면 no-op(중복 감소 방지)
+
+      state.tempTurnStack ??= [];
+      state.tempTurnStack.push(id);
+
+      // 임시 턴 "시작" 자동감소 (+ 내역 수집)
+      const startDecays = decTurnTags(target, 'start');
+
+      // 로그(부여)
+      pushLog(
+        state,
+        'ACTION',
+        `${unitLabel(state, id)}에게 임시 턴 부여.`,
+        action,
+        ctxBefore,
+      );
+
+      // 임시턴 ctx (push 이후라 isTemp가 true일 것)
+      const ctxTemp = makeLogCtx(state);
+
+      // 로그(임시 턴 시작)
+      pushLog(
+        state,
+        'TEMP_TURN_START',
+        `${ctxTemp.unitName ?? id}, 턴 시작.`,
+        action,
+        ctxTemp,
+      );
+
+      // 로그(임시 턴 시작 시 태그 자동감소)
+      if (startDecays.length) {
+        const txt = startDecays
+          .map((c) => `${c.tag} ${c.from}→${c.to}`)
+          .join(', ');
+        pushLog(
+          state,
+          'ACTION',
+          `${ctxTemp.unitName ?? id} 태그 자동감소(턴 시작): ${txt}.`,
+          action,
+          ctxTemp,
+        );
+      }
+
       return;
     }
 
     case 'NEXT_TURN': {
-      if (state.turnOrder.length > 0) {
-        state.turnIndex = (state.turnIndex + 1) % state.turnOrder.length;
+      const ctxBefore = makeLogCtx(state);
+      const order = Array.isArray(state.turnOrder) ? state.turnOrder : [];
+      if (order.length === 0) return;
+
+      // ✅ 현재 턴 주체(임시 턴이 있으면 그쪽이 우선)
+      const activeId = getActiveTurnUnitId(state);
+      if (!activeId) return;
+
+      // 1) 현재 턴 "종료" 자동감소 (+ 내역 수집)
+      let endDecays: TurnTagDecayChange[] = [];
+      {
+        const u = state.units.find((x) => x.id === activeId);
+        if (u) {
+          normalizeUnit(u);
+          endDecays = decTurnTags(u, 'end');
+        }
       }
+
+      // 로그: 턴 종료
+      pushLog(
+        state,
+        ctxBefore.isTemp ? 'TEMP_TURN_END' : 'TURN_END',
+        `${ctxBefore.unitName ?? activeId}, 턴 종료.`,
+        action,
+        ctxBefore,
+      );
+
+      // 로그: 턴 종료 시 태그 자동감소(있을 때만)
+      if (endDecays.length) {
+        const txt = endDecays
+          .map((c) => `${c.tag} ${c.from}→${c.to}`)
+          .join(', ');
+        pushLog(
+          state,
+          'ACTION',
+          `${ctxBefore.unitName ?? activeId} 태그 자동감소(턴 종료): ${txt}.`,
+          action,
+          ctxBefore,
+        );
+      }
+
+      // 2) 임시 턴이면: pop 후 "재개" (턴오더 진행 X, start 감소 X)
+      if (state.tempTurnStack?.length) {
+        state.tempTurnStack.pop();
+        if (state.tempTurnStack.length === 0) delete state.tempTurnStack;
+
+        const ctxResume = makeLogCtx(state);
+        // 재개 로그(원치 않으면 삭제 가능)
+        pushLog(
+          state,
+          'TURN_RESUME',
+          `턴 재개: ${ctxResume.unitName ?? ctxResume.unitId ?? '-'}.`,
+          action,
+          ctxResume,
+        );
+        return;
+      }
+
+      // 3) 정상 턴 진행: label 제외, unit만
+      const unitIdxs = getUnitTurnIndices(order);
+      if (unitIdxs.length === 0) return;
+
+      // turnIndex가 유닛이 아니면 첫 유닛으로 보정
+      state.turnIndex = coerceTurnIndexToUnit(order, state.turnIndex);
+
+      const ti = state.turnIndex;
+      const pos = unitIdxs.indexOf(ti);
+      const nextPos = (pos + 1) % unitIdxs.length;
+      const nextTi = unitIdxs[nextPos];
+
+      // 4) 라운드 증가: 마지막 유닛 -> 첫 유닛으로 넘어갈 때
+      if (nextPos === 0) {
+        const r = Math.floor((state as any).round ?? 1);
+        (state as any).round = Number.isFinite(r) && r >= 1 ? r + 1 : 2;
+      }
+
+      state.turnIndex = nextTi;
+
+      // 5) 다음 유닛 "턴 시작" 자동감소 (+ 내역 수집)
+      let startDecays: TurnTagDecayChange[] = [];
+      const nextEntry = order[nextTi];
+      if (nextEntry?.kind === 'unit') {
+        const nextUnit = state.units.find((x) => x.id === nextEntry.unitId);
+        if (nextUnit) {
+          normalizeUnit(nextUnit);
+          startDecays = decTurnTags(nextUnit, 'start');
+        }
+      }
+
+      const ctxAfter = makeLogCtx(state);
+
+      // 로그: 턴 시작
+      pushLog(
+        state,
+        'TURN_START',
+        `${ctxAfter.unitName ?? ctxAfter.unitId ?? '-'}, 턴 시작.`,
+        action,
+        ctxAfter,
+      );
+
+      // 로그: 턴 시작 시 태그 자동감소(있을 때만)
+      if (startDecays.length) {
+        const txt = startDecays
+          .map((c) => `${c.tag} ${c.from}→${c.to}`)
+          .join(', ');
+        pushLog(
+          state,
+          'ACTION',
+          `${ctxAfter.unitName ?? ctxAfter.unitId ?? '-'} 태그 자동감소(턴 시작): ${txt}.`,
+          action,
+          ctxAfter,
+        );
+      }
+
       return;
     }
 
     case 'PATCH_UNIT': {
+      const ctx = makeLogCtx(state);
+
       const u = findUnit(state, action.unitId);
       normalizeUnit(u);
+
+      const beforeTags = Array.isArray(u.tags) ? [...u.tags] : [];
+      const beforeTagStates = u.tagStates
+        ? structuredClone(u.tagStates)
+        : undefined;
+
       applyUnitPatch(u, action.patch);
+
+      const afterTags = Array.isArray(u.tags) ? [...u.tags] : [];
+      const afterTagStates = u.tagStates
+        ? structuredClone(u.tagStates)
+        : undefined;
+
+      // 수동 tags 변화
+      const { added, removed } = diffManualTags(beforeTags, afterTags);
+      if (added.length || removed.length) {
+        const parts: string[] = [];
+        if (added.length) parts.push(`추가: ${added.join(', ')}`);
+        if (removed.length) parts.push(`제거: ${removed.join(', ')}`);
+        pushLog(
+          state,
+          'ACTION',
+          `${unitLabel(state, action.unitId)} 태그 변경 (${parts.join(' / ')}).`,
+          action,
+          ctx,
+        );
+      }
+
+      // tagStates 변화
+      const tsDiff = diffTagStates(beforeTagStates, afterTagStates);
+      if (tsDiff.length) {
+        pushLog(
+          state,
+          'ACTION',
+          `${unitLabel(state, action.unitId)} 턴태그 변경: ${tsDiff.join(' ; ')}.`,
+          action,
+          ctx,
+        );
+      }
+
       return;
     }
 
@@ -133,17 +419,14 @@ export function applyActionInPlace(
 
       const preset = getPreset(action.presetId);
       const active = isActive(u, preset.id);
-
-      const enabled = action.enabled ?? !active; // 미지정이면 토글
+      const enabled = action.enabled ?? !active;
 
       if (!enabled) {
         removeMod(u, preset.id);
         return;
       }
 
-      // enabled=true
       if (preset.kind === 'toggle') {
-        // 토글형은 항상 stacks=1
         const stacks = 1;
         const modBody = preset.buildMod({
           target: u,
@@ -154,10 +437,10 @@ export function applyActionInPlace(
         return;
       }
 
-      // stack형: 없으면 defaultStacks로 켬(최소 1)
       const curStacks = active
         ? clampStacks(getStacks(u, preset.id), preset.maxStacks)
         : 0;
+
       const nextStacks =
         curStacks > 0
           ? curStacks
@@ -177,14 +460,12 @@ export function applyActionInPlace(
       normalizeUnit(u);
 
       const preset = getPreset(action.presetId);
-
-      // ✅ 토글형에 스택 조작은 의미 없으니 안전하게 no-op
       if (preset.kind !== 'stack') return;
 
       const delta = Math.floor(action.delta ?? 0);
       if (delta === 0) return;
 
-      const curStacks = clampStacks(getStacks(u, preset.id), preset.maxStacks); // 없으면 0
+      const curStacks = clampStacks(getStacks(u, preset.id), preset.maxStacks);
       const nextStacks = clampStacks(curStacks + delta, preset.maxStacks);
 
       if (nextStacks <= 0) {
@@ -202,29 +483,59 @@ export function applyActionInPlace(
     }
 
     case 'SET_UNIT_POS': {
+      const ctx = makeLogCtx(state);
+
       const u = findUnit(state, action.unitId);
       normalizeUnit(u);
 
+      const before = u.pos ? { ...u.pos } : { x: 0, z: 0 };
+
       const x = normPos(action.x);
       const z = normPos(action.z);
-
       u.pos = { x, z };
+
+      const after = u.pos;
+      if (before.x !== after.x || before.z !== after.z) {
+        pushLog(
+          state,
+          'ACTION',
+          `${unitLabel(state, action.unitId)} 위치 설정 ${fmtPos(before)} → ${fmtPos(after)}.`,
+          action,
+          ctx,
+        );
+      }
       return;
     }
 
     case 'MOVE_UNIT': {
+      const ctx = makeLogCtx(state);
+
       const u = findUnit(state, action.unitId);
       normalizeUnit(u);
 
       const dx = normPos(action.dx ?? 0);
       const dz = normPos(action.dz ?? 0);
 
+      const before = u.pos ? { ...u.pos } : { x: 0, z: 0 };
       const cur = u.pos ?? { x: 0, z: 0 };
       u.pos = { x: normPos(cur.x + dx), z: normPos(cur.z + dz) };
+
+      const after = u.pos;
+      if (before.x !== after.x || before.z !== after.z) {
+        pushLog(
+          state,
+          'ACTION',
+          `${unitLabel(state, action.unitId)} 이동 (dx=${dx}, dz=${dz}) ${fmtPos(before)} → ${fmtPos(after)}.`,
+          action,
+          ctx,
+        );
+      }
       return;
     }
 
     case 'UPSERT_MARKER': {
+      const ctx = makeLogCtx(state);
+
       const id = (action.markerId ?? '').trim();
       const name = (action.name ?? '').trim();
       if (!id || !name) return;
@@ -234,19 +545,213 @@ export function applyActionInPlace(
 
       state.markers ??= [];
       const idx = state.markers.findIndex((m) => m.id === id);
-      const m = { id, kind: 'MARKER' as const, name, pos: { x, z } };
+      const existed = idx >= 0;
+      const before = existed ? { ...state.markers[idx].pos } : undefined;
 
+      const m = { id, kind: 'MARKER' as const, name, pos: { x, z } };
       if (idx >= 0) state.markers[idx] = m;
       else state.markers.push(m);
 
+      if (!existed) {
+        pushLog(
+          state,
+          'ACTION',
+          `마커 생성: ${name}(${id}) @ ${fmtPos(m.pos)}.`,
+          action,
+          ctx,
+        );
+      } else {
+        const moved = before && (before.x !== x || before.z !== z);
+        pushLog(
+          state,
+          'ACTION',
+          moved
+            ? `마커 이동: ${name}(${id}) ${fmtPos(before)} → ${fmtPos(m.pos)}.`
+            : `마커 갱신: ${name}(${id}) @ ${fmtPos(m.pos)}.`,
+          action,
+          ctx,
+        );
+      }
       return;
     }
 
     case 'REMOVE_MARKER': {
+      const ctx = makeLogCtx(state);
+
       const id = (action.markerId ?? '').trim();
       if (!id || !state.markers?.length) return;
+
       const idx = state.markers.findIndex((m) => m.id === id);
-      if (idx >= 0) state.markers.splice(idx, 1);
+      if (idx < 0) return;
+
+      const removed = state.markers[idx];
+      state.markers.splice(idx, 1);
+
+      pushLog(
+        state,
+        'ACTION',
+        `마커 삭제: ${removed.name}(${removed.id}) @ ${fmtPos(removed.pos)}.`,
+        action,
+        ctx,
+      );
+      return;
+    }
+
+    case 'CREATE_UNIT': {
+      const ctx = makeLogCtx(state);
+      const name = (action.name ?? '').trim();
+      if (!name) return;
+
+      if (!isSide(action.side)) return;
+
+      const x = normPos(action.x);
+      const z = normPos(action.z);
+
+      const hpMax = Math.max(0, Math.floor(Number(action.hpMax ?? 0)));
+      const acBase = Math.floor(Number(action.acBase ?? 0));
+
+      const aliasRaw = (action.alias ?? '').trim();
+      const alias = aliasRaw ? aliasRaw : undefined;
+
+      const colorCode = normalizeAnsiColorCode(action.colorCode);
+      const id = randomUUID();
+
+      const u: Unit = {
+        id,
+        side: action.side,
+        name,
+        ...(alias ? { alias } : {}),
+        tags: [],
+        mods: [],
+        pos: { x, z },
+        ...(hpMax > 0 ? { hp: { cur: hpMax, max: hpMax } } : {}),
+        ...(Number.isFinite(acBase) ? { acBase } : {}),
+        ...(typeof colorCode === 'number' ? { colorCode } : {}),
+      };
+
+      state.units ??= [];
+      state.turnOrder ??= [];
+
+      state.units.push(u);
+
+      const insertAt = clampIndex(
+        action.turnOrderIndex,
+        state.turnOrder.length,
+      );
+      state.turnOrder.splice(insertAt, 0, { kind: 'unit', unitId: u.id });
+
+      // 삽입이 현재 turnIndex 이전/같으면 +1 (가리키던 항목이 밀림)
+      if (typeof state.turnIndex !== 'number') state.turnIndex = 0;
+      if (insertAt <= state.turnIndex) state.turnIndex += 1;
+
+      state.turnIndex = clampTurnIndex(state.turnOrder, state.turnIndex);
+      state.turnIndex = coerceTurnIndexToUnit(state.turnOrder, state.turnIndex);
+
+      // round 기본값 보정(없거나 이상하면 1)
+      ensureRound(state);
+
+      pushLog(state, 'ACTION', `유닛 생성: ${name}.`, action, ctx);
+      return;
+    }
+
+    case 'REMOVE_UNIT': {
+      const ctx = makeLogCtx(state);
+      const id = (action as any).unitId?.trim?.() ?? '';
+      if (!id) return;
+
+      const removedName = unitLabel(state, id);
+
+      const unitIdx = state.units.findIndex((u) => u.id === id);
+      if (unitIdx < 0) throw new Error(`unit not found: ${id}`);
+
+      const order = Array.isArray(state.turnOrder) ? state.turnOrder : [];
+      const ti = clampTurnIndex(order, state.turnIndex);
+
+      // ✅ 현재 "턴 주체"(임시턴 우선)
+      const activeId = getActiveTurnUnitId(state);
+
+      // tempTurnStack에서 제거(모든 중첩에서 제거)
+      if (state.tempTurnStack?.length) {
+        state.tempTurnStack = state.tempTurnStack.filter((x) => x !== id);
+        if (state.tempTurnStack.length === 0) delete state.tempTurnStack;
+      }
+
+      // units에서 제거
+      state.units.splice(unitIdx, 1);
+
+      // turnOrder에서 해당 유닛 엔트리(중복 포함) 제거 + removedBefore 계산
+      let removedBefore = 0;
+      for (let i = 0; i < order.length; i++) {
+        const t = order[i];
+        if (t?.kind === 'unit' && t.unitId === id) {
+          if (i < ti) removedBefore++;
+        }
+      }
+
+      const filtered = order.filter((t: any) => {
+        if (t?.kind === 'label') return true;
+        if (t?.kind === 'unit') return t.unitId !== id;
+        return false;
+      });
+
+      state.turnOrder = filtered;
+
+      if (filtered.length === 0) {
+        state.turnIndex = 0;
+        pushLog(state, 'ACTION', `유닛 삭제: ${removedName}.`, action, ctx);
+        return;
+      }
+
+      // "현재 턴 주체가 삭제된 경우" => 다음 유닛으로(라벨 스킵)
+      // - 임시턴 주체가 삭제된 경우도 동일하게 취급(표기 규칙)
+      if (activeId === id) {
+        // 임시턴이면 컨텍스트가 애매하니, tempTurnStack은 이미 정리했고
+        // 메인 turnIndex 기준으로 "다음 유닛"으로 옮김(라운드는 올리지 않음)
+        const baseIdx = coerceTurnIndexToUnit(
+          filtered,
+          clampTurnIndex(filtered, ti - removedBefore),
+        );
+        const next = findNextUnitIndex(filtered, baseIdx);
+        state.turnIndex = next ?? coerceTurnIndexToUnit(filtered, 0);
+        pushLog(state, 'ACTION', `유닛 삭제: ${removedName}.`, action, ctx);
+        return;
+      }
+
+      // 현재 턴 주체가 삭제된 게 아니면: 당겨진 만큼만 보정
+      let newIndex = ti - removedBefore;
+      if (!Number.isFinite(newIndex)) newIndex = 0;
+      newIndex = Math.max(0, Math.min(filtered.length - 1, newIndex));
+
+      state.turnIndex = clampTurnIndex(filtered, newIndex);
+      state.turnIndex = coerceTurnIndexToUnit(filtered, state.turnIndex);
+      pushLog(state, 'ACTION', `유닛 삭제: ${removedName}.`, action, ctx);
+      return;
+    }
+
+    case 'MOVE_TURN_ENTRY': {
+      const ctx = makeLogCtx(state);
+
+      const order = Array.isArray(state.turnOrder) ? state.turnOrder : [];
+      const len = order.length;
+      if (len <= 1) return;
+
+      const from = clampTurnIndex(order, action.fromIndex);
+      const to = clampTurnIndex(order, action.toIndex);
+      if (from === to) return;
+
+      // turnIndex는 "메인 턴 포인터"니까, 이동으로 인해 가리키는 엔트리가 바뀌지 않게 보정
+      const tiBefore = clampTurnIndex(order, state.turnIndex);
+      const tiAfter = adjustIndexAfterMove(tiBefore, from, to);
+
+      // 실제 이동
+      state.turnOrder = moveArrayItem(order, from, to);
+
+      // label은 턴 주체가 아니므로, turnIndex가 label을 가리키면 가까운 unit으로 보정
+      state.turnIndex = clampTurnIndex(state.turnOrder, tiAfter);
+      state.turnIndex = coerceTurnIndexToUnit(state.turnOrder, state.turnIndex);
+
+      // 로그(원하면 더 자세히: moved entry 이름도 찍기)
+      pushLog(state, 'ACTION', `턴 순서 변경: ${from} → ${to}.`, action, ctx);
       return;
     }
 
@@ -260,6 +765,11 @@ export function applyActionInPlace(
 function touch(s: EncounterState): EncounterState {
   s.updatedAt = new Date().toISOString();
   return s;
+}
+
+function ensureRound(state: EncounterState) {
+  const r = Math.floor((state as any).round ?? 0);
+  (state as any).round = Number.isFinite(r) && r >= 1 ? r : 1;
 }
 
 function findUnit(state: EncounterState, unitId: string): Unit {
@@ -292,7 +802,6 @@ function isActive(u: Unit, key: string): boolean {
 
 function getStacks(u: Unit, key: string): number {
   const m = (u.mods ?? []).find((x) => x.key === key);
-  // 없으면 0 (스택형 계산 편하게)
   return m ? Math.max(0, Math.floor(m.stacks ?? 1)) : 0;
 }
 
@@ -307,6 +816,276 @@ function removeMod(u: Unit, key: string) {
   if (!u.mods?.length) return;
   const idx = u.mods.findIndex((m) => m.key === key);
   if (idx >= 0) u.mods.splice(idx, 1);
+}
+
+function clampIndex(v: any, len: number): number {
+  const n = Math.floor(Number(v));
+  if (!Number.isFinite(n)) return len; // 기본: 맨 뒤
+  return Math.max(0, Math.min(len, n));
+}
+
+function normalizeAnsiColorCode(v: any): number | undefined {
+  const n = Math.floor(Number(v));
+  if (!Number.isFinite(n)) return undefined;
+  const ok = (n >= 30 && n <= 37) || (n >= 90 && n <= 97) || n === 39;
+  return ok ? n : undefined;
+}
+
+function isSide(v: any): v is Side {
+  return v === 'TEAM' || v === 'ENEMY' || v === 'NEUTRAL';
+}
+
+function clampTurnIndex(order: TurnEntry[], idx: any): number {
+  if (!Array.isArray(order) || order.length === 0) return 0;
+  const n = Math.floor(Number(idx));
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(order.length - 1, n));
+}
+
+function getUnitTurnIndices(order: TurnEntry[]): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < order.length; i++) {
+    if (order[i]?.kind === 'unit') out.push(i);
+  }
+  return out;
+}
+
+/** turnIndex가 label이면, start부터 뒤로 가며 unit을 찾고 없으면 첫 unit */
+function coerceTurnIndexToUnit(order: TurnEntry[], start: any): number {
+  if (!Array.isArray(order) || order.length === 0) return 0;
+
+  const unitIdxs = getUnitTurnIndices(order);
+  if (unitIdxs.length === 0) return 0;
+
+  const s = clampTurnIndex(order, start);
+
+  for (let i = s; i < order.length; i++) {
+    if (order[i]?.kind === 'unit') return i;
+  }
+  return unitIdxs[0];
+}
+
+function getActiveTurnUnitId(state: EncounterState): string | null {
+  const top = state.tempTurnStack?.length
+    ? state.tempTurnStack[state.tempTurnStack.length - 1]
+    : null;
+
+  if (top) return top;
+
+  const order = Array.isArray(state.turnOrder) ? state.turnOrder : [];
+  if (order.length === 0) return null;
+
+  state.turnIndex = coerceTurnIndexToUnit(order, state.turnIndex);
+  const t = order[state.turnIndex];
+  return t?.kind === 'unit' ? t.unitId : null;
+}
+
+function findNextUnitIndex(order: TurnEntry[], fromIdx: number): number | null {
+  if (!Array.isArray(order) || order.length === 0) return null;
+  const n = order.length;
+
+  for (let step = 1; step <= n; step++) {
+    const j = (fromIdx + step) % n;
+    if (order[j]?.kind === 'unit') return j;
+  }
+  return null;
+}
+
+function decTurnTags(u: Unit, when: 'start' | 'end'): TurnTagDecayChange[] {
+  if (!u.tagStates) return [];
+
+  const changes: TurnTagDecayChange[] = [];
+
+  for (const [k, st] of Object.entries(u.tagStates)) {
+    const stacks = clampTagStacks(st?.stacks ?? 0);
+    if (stacks <= 0) {
+      delete u.tagStates[k];
+      continue;
+    }
+
+    const dec = when === 'start' ? !!st.decOnTurnStart : !!st.decOnTurnEnd;
+    if (!dec) continue;
+
+    const next = stacks - 1;
+
+    changes.push({
+      tag: k,
+      from: stacks,
+      to: Math.max(0, next),
+      when,
+    });
+
+    if (next <= 0) delete u.tagStates[k];
+    else u.tagStates[k] = { ...st, stacks: next };
+  }
+
+  if (Object.keys(u.tagStates).length === 0) delete u.tagStates;
+
+  return changes;
+}
+
+function safeRound(state: EncounterState): number {
+  const r = Math.floor((state as any).round ?? 1);
+  return Number.isFinite(r) && r >= 1 ? r : 1;
+}
+
+function getActiveTurnCtx(state: EncounterState): {
+  isTemp: boolean;
+  unitId: string | null;
+} {
+  const tempId = state.tempTurnStack?.length
+    ? state.tempTurnStack[state.tempTurnStack.length - 1]
+    : null;
+
+  if (tempId) return { isTemp: true, unitId: tempId };
+
+  const order = Array.isArray(state.turnOrder) ? state.turnOrder : [];
+  if (order.length === 0) return { isTemp: false, unitId: null };
+
+  // label이면 unit으로 보정
+  state.turnIndex = coerceTurnIndexToUnit(order, state.turnIndex);
+  const t = order[state.turnIndex];
+  if (t?.kind === 'unit') return { isTemp: false, unitId: t.unitId };
+
+  return { isTemp: false, unitId: null };
+}
+
+function resolveUnitName(
+  state: EncounterState,
+  unitId: string | null,
+): string | null {
+  if (!unitId) return null;
+  const u = state.units.find((x) => x.id === unitId);
+  return u?.name ?? unitId;
+}
+
+function makeLogCtx(state: EncounterState): EncounterLogEntry['ctx'] {
+  const { isTemp, unitId } = getActiveTurnCtx(state);
+  return {
+    round: safeRound(state),
+    isTemp,
+    unitId,
+    unitName: resolveUnitName(state, unitId),
+  };
+}
+
+function prefixFromCtx(ctx: EncounterLogEntry['ctx']): string {
+  const who = ctx.unitName ?? ctx.unitId ?? '-';
+  const temp = ctx.isTemp ? '(임시턴) ' : '';
+  return `[${ctx.round}라운드, ${temp}${who} 턴]`;
+}
+
+function pushLog(
+  state: EncounterState,
+  kind: LogKind,
+  message: string,
+  action?: Action,
+  ctxOverride?: EncounterLogEntry['ctx'],
+) {
+  const ctx = ctxOverride ?? makeLogCtx(state);
+  const entry: EncounterLogEntry = {
+    id: randomUUID(),
+    at: new Date().toISOString(),
+    kind,
+    ctx,
+    line: `${prefixFromCtx(ctx)} ${message}`,
+    action,
+  };
+
+  state.logs ??= [];
+  state.logs.push(entry);
+
+  if (state.logs.length > MAX_LOGS) {
+    state.logs.splice(0, state.logs.length - MAX_LOGS);
+  }
+}
+
+function unitLabel(state: EncounterState, id: string): string {
+  return state.units.find((u) => u.id === id)?.name ?? id;
+}
+
+function fmtPos(p?: { x: number; z: number }) {
+  if (!p) return '(x=?, z=?)';
+  return `(x=${p.x}, z=${p.z})`;
+}
+
+function diffManualTags(before: string[], after: string[]) {
+  const b = new Set(before.map((x) => (x ?? '').trim()).filter(Boolean));
+  const a = new Set(after.map((x) => (x ?? '').trim()).filter(Boolean));
+
+  const added: string[] = [];
+  const removed: string[] = [];
+
+  for (const t of a) if (!b.has(t)) added.push(t);
+  for (const t of b) if (!a.has(t)) removed.push(t);
+
+  return { added, removed };
+}
+
+function diffTagStates(
+  before?: Record<string, any>,
+  after?: Record<string, any>,
+): string[] {
+  const out: string[] = [];
+  const b = before ?? {};
+  const a = after ?? {};
+
+  const keys = new Set([...Object.keys(b), ...Object.keys(a)]);
+  for (const k of keys) {
+    const bs = b[k];
+    const as = a[k];
+
+    if (!bs && as) {
+      out.push(
+        `${k} 추가(${as.stacks}${
+          as.decOnTurnStart ? ', 시작감소' : ''
+        }${as.decOnTurnEnd ? ', 종료감소' : ''})`,
+      );
+      continue;
+    }
+    if (bs && !as) {
+      out.push(`${k} 제거`);
+      continue;
+    }
+    if (!bs || !as) continue;
+
+    const changes: string[] = [];
+    if (bs.stacks !== as.stacks) changes.push(`${bs.stacks}→${as.stacks}`);
+    if (!!bs.decOnTurnStart !== !!as.decOnTurnStart)
+      changes.push(`시작감소:${!!as.decOnTurnStart ? 'ON' : 'OFF'}`);
+    if (!!bs.decOnTurnEnd !== !!as.decOnTurnEnd)
+      changes.push(`종료감소:${!!as.decOnTurnEnd ? 'ON' : 'OFF'}`);
+
+    if (changes.length) out.push(`${k} (${changes.join(', ')})`);
+  }
+
+  return out;
+}
+
+function moveArrayItem<T>(arr: T[], from: number, to: number): T[] {
+  const next = arr.slice();
+  const [item] = next.splice(from, 1);
+  next.splice(to, 0, item);
+  return next;
+}
+
+/**
+ * from->to 이동 시, 기존 index가 가리키던 "같은 항목"을 계속 가리키도록 index 보정
+ */
+function adjustIndexAfterMove(
+  curIndex: number,
+  from: number,
+  to: number,
+): number {
+  if (curIndex === from) return to;
+
+  // from이 curIndex 앞에서 빠지고 to가 curIndex 뒤에 들어오면 curIndex는 한 칸 당겨짐
+  if (from < curIndex && curIndex <= to) return curIndex - 1;
+
+  // from이 curIndex 뒤에서 빠지고 to가 curIndex 앞에 들어오면 curIndex는 한 칸 밀림
+  if (to <= curIndex && curIndex < from) return curIndex + 1;
+
+  return curIndex;
 }
 
 // ---------- PATCH helpers ----------
@@ -328,6 +1107,18 @@ function uniqTags(tags: string[]): string[] {
     out.push(s);
   }
   return out;
+}
+
+function clampTagStacks(v: number): number {
+  const n = Math.floor(v);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(MAX_TAG_STACKS, n));
+}
+
+function applyTagStacksPatch(cur: number, op: TagStacksPatch): number {
+  if (op === null) return 0;
+  if (typeof op === 'number') return clampTagStacks(op);
+  return clampTagStacks(cur + Math.floor(op.delta ?? 0));
 }
 
 function applyUnitPatch(u: Unit, patch: UnitPatch) {
@@ -393,7 +1184,6 @@ function applyUnitPatch(u: Unit, patch: UnitPatch) {
     let tags = Array.isArray(u.tags) ? [...u.tags] : [];
 
     if (patch.tags.set) tags = uniqTags(patch.tags.set);
-
     if (patch.tags.add?.length) tags = uniqTags([...tags, ...patch.tags.add]);
 
     if (patch.tags.remove?.length) {
@@ -416,21 +1206,17 @@ function applyUnitPatch(u: Unit, patch: UnitPatch) {
     u.tags = tags;
   }
 
-  // PATCH로 preset 스택/토글 조작
+  // preset 스택/토글
   if (patch.presetStacks) {
     for (const [presetId, op] of Object.entries(patch.presetStacks)) {
       const preset = getPreset(presetId);
 
-      const cur = clampStacks(getStacks(u, preset.id), preset.maxStacks); // 없으면 0
+      const cur = clampStacks(getStacks(u, preset.id), preset.maxStacks);
       let desiredRaw: number;
 
-      if (op === null) {
-        desiredRaw = 0; // 해제
-      } else if (typeof op === 'number') {
-        desiredRaw = op; // 설정
-      } else {
-        desiredRaw = cur + Math.floor(op.delta ?? 0); // 증감
-      }
+      if (op === null) desiredRaw = 0;
+      else if (typeof op === 'number') desiredRaw = op;
+      else desiredRaw = cur + Math.floor(op.delta ?? 0);
 
       const desired = clampStacks(desiredRaw, preset.maxStacks);
 
@@ -439,9 +1225,8 @@ function applyUnitPatch(u: Unit, patch: UnitPatch) {
         continue;
       }
 
-      // enabled 상태로 만들기
       if (preset.kind === 'toggle') {
-        const stacks = 1; // 토글형은 항상 1
+        const stacks = 1;
         const modBody = preset.buildMod({ target: u, stacks, args: undefined });
         upsertMod(u, { key: preset.id, stacks, ...modBody });
       } else {
@@ -450,5 +1235,51 @@ function applyUnitPatch(u: Unit, patch: UnitPatch) {
         upsertMod(u, { key: preset.id, stacks, ...modBody });
       }
     }
+  }
+
+  // 턴 기반 태그(tagStates)
+  if (patch.tagStates) {
+    u.tagStates ??= {};
+
+    for (const [tagKeyRaw, tagOpRaw] of Object.entries(patch.tagStates)) {
+      const tagKey = (tagKeyRaw ?? '').trim();
+      if (!tagKey) continue;
+
+      if (tagOpRaw === null) {
+        delete u.tagStates[tagKey];
+        continue;
+      }
+
+      const tagOp = tagOpRaw as any;
+
+      const curState = u.tagStates[tagKey];
+      const curStacks = curState ? clampTagStacks(curState.stacks) : 0;
+
+      let nextStacks = curStacks;
+      if (tagOp.stacks !== undefined) {
+        nextStacks = applyTagStacksPatch(curStacks || 1, tagOp.stacks);
+      } else if (!curState) {
+        nextStacks = 1;
+      }
+
+      if (nextStacks <= 0) {
+        delete u.tagStates[tagKey];
+        continue;
+      }
+
+      u.tagStates[tagKey] = {
+        stacks: nextStacks,
+        decOnTurnStart:
+          tagOp.decOnTurnStart !== undefined
+            ? !!tagOp.decOnTurnStart
+            : curState?.decOnTurnStart,
+        decOnTurnEnd:
+          tagOp.decOnTurnEnd !== undefined
+            ? !!tagOp.decOnTurnEnd
+            : curState?.decOnTurnEnd,
+      };
+    }
+
+    if (Object.keys(u.tagStates).length === 0) delete u.tagStates;
   }
 }

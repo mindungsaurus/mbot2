@@ -4,14 +4,14 @@ import { StringOption } from 'necord';
 export class NpcFriendDTO {
   @StringOption({
     name: 'npc',
-    description: '대상 NPC 이름',
+    description: 'target NPC name',
     required: true,
   })
   npc: string;
 
   @StringOption({
     name: 'friend',
-    description: '누구의 동료인지(PC 이름). 비우면 동료 해제',
+    description: 'Who is the friend (PC name). Leave blank to remove friend',
     required: false,
   })
   friend: string | null;

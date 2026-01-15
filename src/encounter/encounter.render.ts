@@ -16,6 +16,15 @@ function color(code: number) {
   return `\x1b[1;${code}m`;
 }
 
+const DEATH_SUCCESS_COLOR = color(36); // cyan
+const DEATH_FAILURE_COLOR = color(31); // red
+const SLOT_COLOR = color(34); // blue
+const CONSUMABLE_COLOR = color(33); // yellow
+
+function colorNumber(value: number | string, tint: string) {
+  return `${tint}${value}${RESET}`;
+}
+
 function unitColor(u: Unit) {
   if (typeof u.colorCode === 'number') return color(u.colorCode);
   if (u.side === 'TEAM') return color(34);
@@ -70,7 +79,7 @@ function fmtSpellSlots(u: Unit): string {
   for (let lvl = 1; lvl <= max; lvl++) {
     const raw = (slots as any)[lvl] ?? (slots as any)[String(lvl)] ?? 0;
     const n = Math.max(0, Math.floor(Number(raw)));
-    parts.push(String(n));
+    parts.push(colorNumber(n, SLOT_COLOR));
   }
   return `[${parts.join('/')}]`;
 }
@@ -90,23 +99,26 @@ function fmtConsumables(u: Unit): string {
   return entries
     .map(([name, count]) => {
       const n = Math.max(0, Math.floor(Number(count ?? 0)));
-      return `[${name} ${n}]`;
+      return `[${name} ${colorNumber(n, CONSUMABLE_COLOR)}]`;
     })
     .join(' ');
 }
 
 function fmtResources(u: Unit): string {
-  const slots = fmtSpellSlots(u);
   const cons = fmtConsumables(u);
-  if (!slots && !cons) return '';
-  return ' ' + [slots, cons].filter(Boolean).join(' ');
+  const slots = fmtSpellSlots(u);
+  if (!cons && !slots) return '';
+  return ' ' + [cons, slots].filter(Boolean).join(' ');
 }
 
 function fmtDeathSaves(u: Unit): string {
   const success = Math.max(0, Math.floor(u.deathSaves?.success ?? 0));
   const failure = Math.max(0, Math.floor(u.deathSaves?.failure ?? 0));
   if (success === 0 && failure === 0) return '';
-  return `(${success}, ${failure})`;
+  return `(${colorNumber(success, DEATH_SUCCESS_COLOR)}, ${colorNumber(
+    failure,
+    DEATH_FAILURE_COLOR,
+  )})`;
 }
 
 function fmtHp(u: Unit) {
@@ -177,17 +189,18 @@ export function renderAnsi(state: EncounterState): string {
 function renderUnitLine(u: Unit): string {
   const ds = fmtDeathSaves(u);
   const dsText = ds ? ` ${ds}` : '';
+  const resourcesText = fmtResources(u);
+  const tagsText = fmtTags(u);
 
   if (!u.hp && getComputedAc(u) === undefined) {
     const text = u.note ?? u.name;
-    return `${unitColor(u)}${text}${RESET}${dsText}${fmtResources(u)}${fmtTags(u)}`;
+    return `${unitColor(u)}${text}${RESET}${resourcesText}${dsText}${tagsText}`;
   }
 
   const hp = fmtHp(u);
   const ac = fmtAc(u);
   let left = `${unitColor(u)}${u.name} ${GRAY}- ${hp} / ${AC_COLOR}${ac}${RESET}`;
-  if (ds) left += `${GRAY} ${ds}${RESET}`;
-  return left + fmtResources(u) + fmtTags(u);
+  return left + resourcesText + dsText + tagsText;
 }
 
 function renderTurnLine(state: EncounterState): string {

@@ -46,3 +46,43 @@ model ItemAlias {
   alias    String @unique
   itemName String
 }
+
+model User {
+  id           String        @id @default(cuid())
+  username     String        @unique
+  passwordHash String
+  passwordSalt String
+  createdAt    DateTime      @default(now())
+  sessions     UserSession[]
+  encounters   Encounter[]
+}
+
+model UserSession {
+  id         String   @id @default(cuid())
+  tokenHash  String   @unique
+  userId     String
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Encounter {
+  id        String          @id @default(cuid())
+  ownerId   String
+  name      String
+  state     Json
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+  owner     User            @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  undo      EncounterUndo[]
+}
+
+model EncounterUndo {
+  id          Int       @id @default(autoincrement())
+  encounterId String
+  state       Json
+  createdAt   DateTime  @default(now())
+  encounter   Encounter @relation(fields: [encounterId], references: [id], onDelete: Cascade)
+
+  @@index([encounterId, createdAt])
+}

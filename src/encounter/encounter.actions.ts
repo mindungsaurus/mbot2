@@ -8,6 +8,7 @@ import {
   UnitMod,
   TurnEntry,
   TagStacksPatch,
+  Pos,
   Side,
   EncounterLogEntry,
   LogKind,
@@ -36,6 +37,28 @@ function normPos(v: any): number {
   const n = Math.floor(Number(v));
   if (!Number.isFinite(n)) return 0;
   return Math.max(-MAX_ABS_POS, Math.min(MAX_ABS_POS, n));
+}
+
+// Normalize marker footprint cells to clamped, unique positions.
+function normalizeMarkerCells(cells: any): Pos[] | undefined {
+  if (!Array.isArray(cells)) return undefined;
+
+  const seen = new Set<string>();
+  const out: Pos[] = [];
+
+  for (const cell of cells) {
+    if (!cell) continue;
+
+    const x = normPos((cell as any).x);
+    const z = normPos((cell as any).z);
+    const key = `${x},${z}`;
+
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ x, z });
+  }
+
+  return out.length ? out : undefined;
 }
 
 export function applyAction(
@@ -167,6 +190,119 @@ export function applyActionInPlace(
       return;
     }
 
+    case 'SPEND_SPELL_SLOT': {
+      const ctx = makeLogCtx(state);
+      const u = findUnit(state, action.unitId);
+      normalizeUnit(u);
+
+      const level = Math.floor(Number(action.level));
+      if (!Number.isFinite(level) || level < 1 || level > 9) return;
+
+      const slots = u.spellSlots ?? {};
+      const raw = (slots as any)[level] ?? (slots as any)[String(level)];
+      if (raw === undefined) return;
+
+      const before = Math.max(0, Math.floor(Number(raw)));
+      if (before <= 0) return;
+
+      const after = Math.max(0, before - 1);
+      u.spellSlots ??= {};
+      u.spellSlots[level] = after;
+
+      pushLog(
+        state,
+        'ACTION',
+        `${unitLabel(state, action.unitId)} 주문 슬롯 L${level}: ${before} → ${after}.`,
+        action,
+        ctx,
+      );
+      return;
+    }
+
+    case 'RECOVER_SPELL_SLOT': {
+      const ctx = makeLogCtx(state);
+      const u = findUnit(state, action.unitId);
+      normalizeUnit(u);
+
+      const level = Math.floor(Number(action.level));
+      if (!Number.isFinite(level) || level < 1 || level > 9) return;
+
+      const slots = u.spellSlots ?? {};
+      const raw = (slots as any)[level] ?? (slots as any)[String(level)];
+      if (raw === undefined) return;
+
+      const before = Math.max(0, Math.floor(Number(raw)));
+      const after = before + 1;
+      u.spellSlots ??= {};
+      u.spellSlots[level] = after;
+
+      pushLog(
+        state,
+        'ACTION',
+        `${unitLabel(state, action.unitId)} 주문 슬롯 L${level} 회복: ${before} → ${after}.`,
+        action,
+        ctx,
+      );
+      return;
+    }
+
+    case 'EDIT_DEATH_SAVES': {
+      const ctx = makeLogCtx(state);
+      const u = findUnit(state, action.unitId);
+      normalizeUnit(u);
+
+      const beforeSuccess = Math.max(
+        0,
+        Math.floor(Number(u.deathSaves?.success ?? 0)),
+      );
+      const beforeFailure = Math.max(
+        0,
+        Math.floor(Number(u.deathSaves?.failure ?? 0)),
+      );
+
+      let nextSuccess = beforeSuccess;
+      let nextFailure = beforeFailure;
+
+      if (typeof action.success === 'number') {
+        nextSuccess = Math.max(0, Math.floor(action.success));
+      } else if (typeof action.deltaSuccess === 'number') {
+        nextSuccess = Math.max(
+          0,
+          Math.floor(beforeSuccess + action.deltaSuccess),
+        );
+      }
+
+      if (typeof action.failure === 'number') {
+        nextFailure = Math.max(0, Math.floor(action.failure));
+      } else if (typeof action.deltaFailure === 'number') {
+        nextFailure = Math.max(
+          0,
+          Math.floor(beforeFailure + action.deltaFailure),
+        );
+      }
+
+      if (nextSuccess === beforeSuccess && nextFailure === beforeFailure) return;
+
+      u.deathSaves = { success: nextSuccess, failure: nextFailure };
+
+      const diffs: string[] = [];
+      if (nextSuccess !== beforeSuccess) {
+        diffs.push(`성공 ${beforeSuccess}→${nextSuccess}`);
+      }
+      if (nextFailure !== beforeFailure) {
+        diffs.push(`실패 ${beforeFailure}→${nextFailure}`);
+      }
+
+      pushLog(
+        state,
+        'ACTION',
+        `${unitLabel(state, action.unitId)} 사망 내성 변경: ${diffs.join(', ')}.`,
+        action,
+        ctx,
+      );
+      return;
+    }
+
     case 'TOGGLE_TAG': {
       const ctx = makeLogCtx(state);
 
@@ -188,6 +324,30 @@ export function applyActionInPlace(
         action,
         ctx,
       );
+      return;
+    }
+
+    case 'TOGGLE_HIDDEN': {
+      const ctx = makeLogCtx(state);
+
+      const u = findUnit(state, action.unitId);
+      normalizeUnit(u);
+
+      const before = !!u.hidden;
+      const after = action.hidden !== undefined ? !!action.hidden : !before;
+
+      if (after) u.hidden = true;
+      else delete u.hidden;
+
+      if (before !== after) {
+        pushLog(
+          state,
+          'ACTION',
+          `${unitLabel(state, action.unitId)} 숨겨짐 ${after ? '적용' : '해제'}.`,
+          action,
+          ctx,
+        );
+      }
       return;
     }
 
@@ -256,6 +416,7 @@ export function applyActionInPlace(
       const activeId = getActiveTurnUnitId(state);
       if (!activeId) return;
 
+
       // 1) 현재 턴 "종료" 자동감소 (+ 내역 수집)
       let endDecays: TurnTagDecayChange[] = [];
       {
@@ -318,6 +479,8 @@ export function applyActionInPlace(
       const nextPos = (pos + 1) % unitIdxs.length;
       const nextTi = unitIdxs[nextPos];
 
+      const markerIds = getMarkerIdsBetween(order, ti, nextTi);
+
       // 4) 라운드 증가: 마지막 유닛 -> 첫 유닛으로 넘어갈 때
       if (nextPos === 0) {
         const r = Math.floor((state as any).round ?? 1);
@@ -325,6 +488,10 @@ export function applyActionInPlace(
       }
 
       state.turnIndex = nextTi;
+
+      if (markerIds.length) {
+        tickMarkersOnPass(state, markerIds, action, ctxBefore);
+      }
 
       // 5) 다음 유닛 "턴 시작" 자동감소 (+ 내역 수집)
       let startDecays: TurnTagDecayChange[] = [];
@@ -375,6 +542,8 @@ export function applyActionInPlace(
       const beforeTagStates = u.tagStates
         ? structuredClone(u.tagStates)
         : undefined;
+      const beforeSlots = u.spellSlots ? { ...u.spellSlots } : undefined;
+      const beforeHidden = !!u.hidden;
 
       applyUnitPatch(u, action.patch);
 
@@ -382,6 +551,8 @@ export function applyActionInPlace(
       const afterTagStates = u.tagStates
         ? structuredClone(u.tagStates)
         : undefined;
+      const afterSlots = u.spellSlots ? { ...u.spellSlots } : undefined;
+      const afterHidden = !!u.hidden;
 
       // 수동 tags 변화
       const { added, removed } = diffManualTags(beforeTags, afterTags);
@@ -405,6 +576,63 @@ export function applyActionInPlace(
           state,
           'ACTION',
           `${unitLabel(state, action.unitId)} 턴태그 변경: ${tsDiff.join(' ; ')}.`,
+          action,
+          ctx,
+        );
+      }
+
+      // spellSlots 변화
+      {
+        const levels = new Set<number>();
+        for (const key of Object.keys(beforeSlots ?? {})) {
+          const lvl = Math.floor(Number(key));
+          if (Number.isFinite(lvl) && lvl >= 1 && lvl <= 9) levels.add(lvl);
+        }
+        for (const key of Object.keys(afterSlots ?? {})) {
+          const lvl = Math.floor(Number(key));
+          if (Number.isFinite(lvl) && lvl >= 1 && lvl <= 9) levels.add(lvl);
+        }
+
+        const diffs: string[] = [];
+        const normalizeSlot = (raw: any) =>
+          Math.max(0, Math.floor(Number(raw ?? 0)));
+
+        for (const lvl of Array.from(levels).sort((a, b) => a - b)) {
+          const key = String(lvl);
+          const beforeHas =
+            !!beforeSlots &&
+            Object.prototype.hasOwnProperty.call(beforeSlots, key);
+          const afterHas =
+            !!afterSlots &&
+            Object.prototype.hasOwnProperty.call(afterSlots, key);
+
+          if (!beforeHas && !afterHas) continue;
+          const beforeVal = beforeHas ? normalizeSlot((beforeSlots as any)[key]) : undefined;
+          const afterVal = afterHas ? normalizeSlot((afterSlots as any)[key]) : undefined;
+          if (beforeHas && afterHas && beforeVal === afterVal) continue;
+
+          diffs.push(
+            `L${lvl} ${beforeVal === undefined ? '-' : beforeVal}→${afterVal === undefined ? '-' : afterVal}`,
+          );
+        }
+
+        if (diffs.length) {
+          pushLog(
+            state,
+            'ACTION',
+            `${unitLabel(state, action.unitId)} 주문 슬롯 변경: ${diffs.join(', ')}.`,
+            action,
+            ctx,
+          );
+        }
+      }
+
+      // hidden 변화
+      if (beforeHidden !== afterHidden) {
+        pushLog(
+          state,
+          'ACTION',
+          `${unitLabel(state, action.unitId)} 숨겨짐 ${afterHidden ? '적용' : '해제'}.`,
           action,
           ctx,
         );
@@ -522,10 +750,11 @@ export function applyActionInPlace(
 
       const after = u.pos;
       if (before.x !== after.x || before.z !== after.z) {
+        const moved = formatMoveDelta(after.x - before.x, after.z - before.z);
         pushLog(
           state,
           'ACTION',
-          `${unitLabel(state, action.unitId)} 이동 (dx=${dx}, dz=${dz}) ${fmtPos(before)} → ${fmtPos(after)}.`,
+          `${unitLabel(state, action.unitId)} ${moved} ${fmtPos(before)} → ${fmtPos(after)}.`,
           action,
           ctx,
         );
@@ -538,6 +767,8 @@ export function applyActionInPlace(
 
       const id = (action.markerId ?? '').trim();
       const name = (action.name ?? '').trim();
+      const aliasRaw =
+        typeof action.alias === 'string' ? action.alias.trim() : '';
       if (!id || !name) return;
 
       const x = normPos(action.x);
@@ -548,7 +779,64 @@ export function applyActionInPlace(
       const existed = idx >= 0;
       const before = existed ? { ...state.markers[idx].pos } : undefined;
 
-      const m = { id, kind: 'MARKER' as const, name, pos: { x, z } };
+      const base = existed ? state.markers[idx] : undefined;
+      const m: any = {
+        ...(base ?? {}),
+        id,
+        kind: 'MARKER' as const,
+        name,
+        pos: { x, z },
+      };
+
+      if (action.alias !== undefined) {
+        if (aliasRaw) m.alias = aliasRaw;
+        else delete m.alias;
+      }
+
+      if (action.cells !== undefined) {
+        if (action.cells === null) {
+          delete m.cells;
+        } else {
+          const normalized = normalizeMarkerCells(action.cells);
+          if (normalized?.length) m.cells = normalized;
+          else delete m.cells;
+        }
+      }
+
+      if (action.duration !== undefined) {
+        if (action.duration === null) {
+          delete m.duration;
+          delete m.createdRound;
+          delete m.ownerUnitId;
+        } else {
+          const duration = Math.floor(Number(action.duration));
+          if (!Number.isFinite(duration) || duration <= 0) {
+            delete m.duration;
+            delete m.createdRound;
+            delete m.ownerUnitId;
+          } else {
+            m.duration = duration;
+            delete m.createdRound;
+            delete m.ownerUnitId;
+          }
+        }
+      }
+      const order = Array.isArray(state.turnOrder)
+        ? state.turnOrder
+        : (state.turnOrder = []);
+      const hasEntry = order.some(
+        (t: any) => t?.kind === 'marker' && t.markerId === id,
+      );
+      const wantsEntry = Number.isFinite(m.duration) && m.duration > 0;
+
+      if (wantsEntry && !hasEntry) {
+        const insertAt = coerceTurnIndexToUnit(order, state.turnIndex);
+        order.splice(insertAt, 0, { kind: 'marker', markerId: id });
+        if (insertAt <= state.turnIndex) state.turnIndex += 1;
+      } else if (!wantsEntry && hasEntry) {
+        removeMarkerEntriesFromOrder(state, new Set([id]));
+      }
+
       if (idx >= 0) state.markers[idx] = m;
       else state.markers.push(m);
 
@@ -586,6 +874,8 @@ export function applyActionInPlace(
 
       const removed = state.markers[idx];
       state.markers.splice(idx, 1);
+
+      removeMarkerEntriesFromOrder(state, new Set([id]));
 
       pushLog(
         state,
@@ -691,6 +981,7 @@ export function applyActionInPlace(
       const filtered = order.filter((t: any) => {
         if (t?.kind === 'label') return true;
         if (t?.kind === 'unit') return t.unitId !== id;
+        if (t?.kind === 'marker') return true;
         return false;
       });
 
@@ -848,6 +1139,122 @@ function getUnitTurnIndices(order: TurnEntry[]): number[] {
     if (order[i]?.kind === 'unit') out.push(i);
   }
   return out;
+}
+
+function getMarkerIdsBetween(
+  order: TurnEntry[],
+  fromIdx: number,
+  toIdx: number,
+): string[] {
+  if (!Array.isArray(order) || order.length === 0) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+
+  let i = (fromIdx + 1) % order.length;
+  const start = i;
+
+  while (true) {
+    const t = order[i];
+    if (t?.kind === 'marker' && t.markerId) {
+      if (!seen.has(t.markerId)) {
+        seen.add(t.markerId);
+        out.push(t.markerId);
+      }
+    }
+
+    if (i === toIdx) break;
+    i = (i + 1) % order.length;
+    if (i === start) break;
+  }
+
+  return out;
+}
+
+function removeMarkerEntriesFromOrder(
+  state: EncounterState,
+  markerIds: Set<string>,
+) {
+  if (!state.turnOrder?.length || markerIds.size === 0) return;
+
+  let removedBefore = 0;
+  const filtered = state.turnOrder.filter((t, idx) => {
+    if (t?.kind === 'marker' && markerIds.has(t.markerId)) {
+      if (idx < state.turnIndex) removedBefore++;
+      return false;
+    }
+    return true;
+  });
+
+  if (filtered.length === state.turnOrder.length) return;
+
+  state.turnOrder = filtered;
+
+  if (removedBefore) {
+    state.turnIndex = Math.max(0, state.turnIndex - removedBefore);
+  }
+
+  state.turnIndex = clampTurnIndex(state.turnOrder, state.turnIndex);
+  state.turnIndex = coerceTurnIndexToUnit(state.turnOrder, state.turnIndex);
+}
+
+function tickMarkersOnPass(
+  state: EncounterState,
+  markerIds: string[],
+  action?: Action,
+  ctxOverride?: EncounterLogEntry['ctx'],
+) {
+  if (!state.markers?.length || markerIds.length === 0) return;
+
+  const decays: string[] = [];
+  const removed: { id: string; name: string }[] = [];
+  const missingIds: string[] = [];
+
+  for (const markerId of markerIds) {
+    const m = state.markers.find((x) => x.id === markerId);
+    if (!m) {
+      missingIds.push(markerId);
+      continue;
+    }
+
+    const duration = Math.floor(Number(m.duration ?? 0));
+    if (!Number.isFinite(duration) || duration <= 0) continue;
+
+    const next = duration - 1;
+    if (next <= 0) {
+      removed.push({ id: m.id, name: m.name });
+      continue;
+    }
+
+    m.duration = next;
+    decays.push(`${m.name}(${m.id}) ${duration}->${next}`);
+  }
+
+  const idsToRemove = new Set<string>([
+    ...missingIds,
+    ...removed.map((m) => m.id),
+  ]);
+
+  if (idsToRemove.size) {
+    state.markers = state.markers.filter((m) => !idsToRemove.has(m.id));
+    removeMarkerEntriesFromOrder(state, idsToRemove);
+  }
+
+  const ctx = ctxOverride ?? makeLogCtx(state);
+
+  if (decays.length) {
+    pushLog(
+      state,
+      'ACTION',
+      `Marker duration: ${decays.join(', ')}.`,
+      action,
+      ctx,
+    );
+  }
+
+  if (removed.length) {
+    const names = removed.map((m) => `${m.name}(${m.id})`).join(', ');
+    pushLog(state, 'ACTION', `Marker expired: ${names}.`, action, ctx);
+  }
 }
 
 /** turnIndex가 label이면, start부터 뒤로 가며 unit을 찾고 없으면 첫 unit */
@@ -1009,6 +1416,22 @@ function fmtPos(p?: { x: number; z: number }) {
   return `(x=${p.x}, z=${p.z})`;
 }
 
+function formatMoveDelta(dx: number, dz: number): string {
+  // Translate delta into human-readable directions for logs (3m per cell).
+  const step = 3;
+  const parts: string[] = [];
+  if (dx !== 0) {
+    const dir = dx > 0 ? '오른쪽' : '왼쪽';
+    parts.push(`${dir}으로 ${Math.abs(dx) * step}m 이동`);
+  }
+  if (dz !== 0) {
+    const dir = dz > 0 ? '위' : '아래';
+    const verb = dz > 0 ? '상승' : '하강';
+    parts.push(`${dir}로 ${Math.abs(dz) * step}m ${verb}`);
+  }
+  return parts.join(', ');
+}
+
 function diffManualTags(before: string[], after: string[]) {
   const b = new Set(before.map((x) => (x ?? '').trim()).filter(Boolean));
   const a = new Set(after.map((x) => (x ?? '').trim()).filter(Boolean));
@@ -1134,6 +1557,14 @@ function applyUnitPatch(u: Unit, patch: UnitPatch) {
     else u.colorCode = Math.floor(patch.colorCode);
   }
 
+  if (patch.hidden !== undefined) {
+    if (patch.hidden === null || patch.hidden === false) {
+      delete u.hidden;
+    } else {
+      u.hidden = true;
+    }
+  }
+
   if (patch.ac !== undefined) {
     if (patch.ac === null) {
       delete u.acBase;
@@ -1178,6 +1609,36 @@ function applyUnitPatch(u: Unit, patch: UnitPatch) {
       u.hp.cur = Math.max(0, u.hp.cur);
       u.hp.cur = Math.min(u.hp.cur, u.hp.max);
     }
+  }
+
+  if (patch.spellSlots !== undefined) {
+    u.spellSlots ??= {};
+    for (const [k, v] of Object.entries(patch.spellSlots)) {
+      const lvl = Math.floor(Number(k));
+      if (!Number.isFinite(lvl) || lvl < 1 || lvl > 9) continue;
+      if (v === null) {
+        delete u.spellSlots[lvl];
+        continue;
+      }
+      const n = Math.max(0, Math.floor(Number(v)));
+      u.spellSlots[lvl] = n;
+    }
+    if (Object.keys(u.spellSlots).length === 0) delete u.spellSlots;
+  }
+
+  if (patch.consumables !== undefined) {
+    u.consumables ??= {};
+    for (const [rawKey, v] of Object.entries(patch.consumables)) {
+      const key = (rawKey ?? '').trim();
+      if (!key) continue;
+      if (v === null) {
+        delete u.consumables[key];
+        continue;
+      }
+      const n = Math.max(0, Math.floor(Number(v)));
+      u.consumables[key] = n;
+    }
+    if (Object.keys(u.consumables).length === 0) delete u.consumables;
   }
 
   if (patch.tags) {

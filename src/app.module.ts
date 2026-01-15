@@ -8,6 +8,7 @@ import { GoldModule } from './gold/gold.module';
 import { ItemsModule } from './items/items.module';
 import { DiceModule } from './dice/dice.module';
 import { EncounterModule } from './encounter/encounter.module';
+import { AuthModule } from './auth/auth.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { EncounterModule } from './encounter/encounter.module';
     GoldModule,
     ItemsModule,
     DiceModule,
+    AuthModule,
     EncounterModule,
   ],
   controllers: [AppController],

@@ -24,7 +24,15 @@ export type Marker = {
   id: string;
   kind: 'MARKER';
   name: string;
+  alias?: string;
   pos: Pos;
+  // Optional multi-cell footprint
+  cells?: Pos[];
+  // Optional duration; decremented when this marker entry is passed in turn order.
+  duration?: number;
+  // Legacy fields (reserved for future use).
+  createdRound?: number;
+  ownerUnitId?: string;
 };
 
 /** 턴 기반 태그(스택/옵션) */
@@ -40,6 +48,7 @@ export interface Unit {
   name: string;
 
   hp?: Hp;
+  deathSaves?: { success: number; failure: number };
 
   acBase?: number;
   integrityBase?: number;
@@ -53,8 +62,15 @@ export interface Unit {
   /** formation 등에서 사용할 별칭(옵션) */
   alias?: string;
 
+  /** 숨겨짐: formation 등에서 노출하지 않음 */
+  hidden?: boolean;
+
   // 프리셋/버프(토글/스택)는 여기에만
   mods?: UnitMod[];
+
+  // ?? ?? / ?? ???
+  spellSlots?: Record<number, number>;
+  consumables?: Record<string, number>;
 
   note?: string;
   colorCode?: number;
@@ -67,7 +83,8 @@ export interface Unit {
 
 export type TurnEntry =
   | { kind: 'unit'; unitId: string }
-  | { kind: 'label'; text: string };
+  | { kind: 'label'; text: string }
+  | { kind: 'marker'; markerId: string };
 
 export interface EncounterState {
   id: string;
@@ -160,10 +177,14 @@ export interface UnitPatch {
   hp?: HpPatch | null;
 
   tags?: TagsPatch; // 수동 태그만
-  tagStates?: Record<string, TurnTagPatch | null>; // 턴 기반 태그 patch
+  tagStates?: Record<string, TurnTagPatch | null>;
+
+  spellSlots?: Record<number, number | null>;
+  consumables?: Record<string, number | null>; // 턴 기반 태그 patch
 
   note?: string | null;
   colorCode?: number | null;
+  hidden?: boolean | null;
 
   presetStacks?: Record<string, StackPatch>;
 }
@@ -179,7 +200,18 @@ export type Action =
       temp: number;
       mode?: 'normal' | 'force';
     }
+  | { type: 'SPEND_SPELL_SLOT'; unitId: string; level: number }
+  | { type: 'RECOVER_SPELL_SLOT'; unitId: string; level: number }
+  | {
+      type: 'EDIT_DEATH_SAVES';
+      unitId: string;
+      success?: number;
+      failure?: number;
+      deltaSuccess?: number;
+      deltaFailure?: number;
+    }
   | { type: 'TOGGLE_TAG'; unitId: string; tag: string }
+  | { type: 'TOGGLE_HIDDEN'; unitId: string; hidden?: boolean }
   | { type: 'NEXT_TURN' }
   | { type: 'PATCH_UNIT'; unitId: string; patch: UnitPatch }
   | {
@@ -202,8 +234,11 @@ export type Action =
       type: 'UPSERT_MARKER';
       markerId: string;
       name: string;
+      alias?: string;
       x: number;
       z: number;
+      cells?: Pos[] | null;
+      duration?: number | null;
     }
   | { type: 'REMOVE_MARKER'; markerId: string }
   | {

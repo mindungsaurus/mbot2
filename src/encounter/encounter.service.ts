@@ -1,90 +1,157 @@
-//src/encounter/encounter.service.ts
-import { BadRequestException, Injectable } from '@nestjs/common';
-import { promises as fs } from 'fs';
-import * as path from 'path';
+﻿//src/encounter/encounter.service.ts
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { Prisma, PrismaClient } from '@prisma/client';
+import { randomUUID } from 'crypto';
 
 import type { EncounterState, Action } from './encounter.types';
 import { applyAction, applyActions } from './encounter.actions';
 import { renderAnsi } from './encounter.render';
-import { buildDemoEncounter } from './encounter.seed';
 
 const MAX_UNDO = 50;
 
+function asJson(value: unknown): Prisma.InputJsonValue {
+  return value as Prisma.InputJsonValue;
+}
+
 @Injectable()
 export class EncounterService {
-  private store = new Map<string, EncounterState>();
-  private dataDir = process.env.COMBAT_DATA_DIR ?? './data';
+  constructor(private readonly prisma: PrismaClient) {}
 
-  private undoStore = new Map<string, EncounterState[]>();
-
-  async get(id: string): Promise<EncounterState> {
-    const cached = this.store.get(id);
-    if (cached) return cached;
-
-    const loaded = await this.tryLoad(id);
-    if (loaded) {
-      const { next: migrated, changed } = this.ensurePositions(loaded);
-
-      this.store.set(id, migrated);
-
-      // 한번이라도 바뀌었으면 파일도 갱신 저장(다음부터는 마이그레이션 필요 없음)
-      if (changed) await this.save(id, migrated);
-
-      return migrated;
-    }
-
-    // 없으면 기본 생성
-    const fresh: EncounterState =
-      id === 'demo'
-        ? buildDemoEncounter()
-        : {
-            id,
-            units: [],
-            markers: [],
-            turnOrder: [],
-            turnIndex: 0,
-            round: 1,
-            updatedAt: new Date().toISOString(),
-          };
-
-    this.store.set(id, fresh);
-    await this.save(id, fresh);
-    return fresh;
+  async list(userId: string) {
+    return this.prisma.encounter.findMany({
+      where: { ownerId: userId },
+      orderBy: { updatedAt: 'desc' },
+      select: { id: true, name: true, updatedAt: true },
+    });
   }
 
-  async apply(id: string, body: Action | Action[]): Promise<EncounterState> {
-    const cur = await this.get(id);
+  async create(userId: string, name?: string): Promise<EncounterState> {
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    const title = (name ?? '').trim() || `Encounter ${id.slice(0, 8)}`;
 
-    // undo용 "적용 전" 스냅샷
+    const state: EncounterState = {
+      id,
+      units: [],
+      markers: [],
+      turnOrder: [],
+      turnIndex: 0,
+      round: 1,
+      updatedAt: now,
+    };
+
+    await this.prisma.encounter.create({
+      data: {
+        id,
+        ownerId: userId,
+        name: title,
+        state: asJson(state),
+      },
+    });
+
+    return state;
+  }
+
+  async get(userId: string, id: string): Promise<EncounterState> {
+    const row = await this.prisma.encounter.findFirst({
+      where: { id, ownerId: userId },
+    });
+    if (!row) throw new NotFoundException('encounter not found');
+
+    const raw = row.state as unknown as EncounterState;
+    const { next, changed } = this.ensurePositions(raw);
+    if (next.id !== id) {
+      next.id = id;
+      next.updatedAt = new Date().toISOString();
+    }
+
+    if (changed) {
+      await this.prisma.encounter.update({
+        where: { id },
+        data: { state: asJson(next) },
+      });
+    }
+
+    return next;
+  }
+
+  async apply(
+    userId: string,
+    id: string,
+    body: Action | Action[],
+  ): Promise<EncounterState> {
+    const row = await this.prisma.encounter.findFirst({
+      where: { id, ownerId: userId },
+    });
+    if (!row) throw new NotFoundException('encounter not found');
+
+    const cur = row.state as unknown as EncounterState;
+    cur.id = id;
+
     const prevSnapshot: EncounterState = structuredClone(cur);
 
-    // next 계산 (여기서 로그도 next에 쌓임)
     const next = Array.isArray(body)
       ? applyActions(cur, body)
       : applyAction(cur, body);
 
-    // 저장 성공 후에만 커밋
-    await this.save(id, next);
-    this.store.set(id, next);
+    next.id = id;
+    next.updatedAt = new Date().toISOString();
 
-    this.pushUndo(id, prevSnapshot);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.encounterUndo.create({
+        data: { encounterId: id, state: asJson(prevSnapshot) },
+      });
+      await tx.encounter.update({ where: { id }, data: { state: asJson(next) } });
+
+      const count = await tx.encounterUndo.count({
+        where: { encounterId: id },
+      });
+      if (count > MAX_UNDO) {
+        const old = await tx.encounterUndo.findMany({
+          where: { encounterId: id },
+          orderBy: { createdAt: 'asc' },
+          take: count - MAX_UNDO,
+          select: { id: true },
+        });
+        if (old.length) {
+          await tx.encounterUndo.deleteMany({
+            where: { id: { in: old.map((o) => o.id) } },
+          });
+        }
+      }
+    });
+
     return next;
   }
 
-  // ✅ 새 엔드포인트에서 호출할 undo
-  async undo(id: string): Promise<EncounterState> {
-    const stack = this.undoStore.get(id);
-    if (!stack || stack.length === 0) {
+  async undo(userId: string, id: string): Promise<EncounterState> {
+    const row = await this.prisma.encounter.findFirst({
+      where: { id, ownerId: userId },
+      select: { id: true },
+    });
+    if (!row) throw new NotFoundException('encounter not found');
+
+    const last = await this.prisma.encounterUndo.findFirst({
+      where: { encounterId: id },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!last) {
       throw new BadRequestException('undo할 기록이 없습니다.');
     }
 
-    const prev = stack.pop()!;
-
-    // undo도 "상태 변화"니까 updatedAt은 갱신하는 걸 추천
+    const prev = last.state as unknown as EncounterState;
+    prev.id = id;
     prev.updatedAt = new Date().toISOString();
 
-    await this.save(id, prev);
-    this.store.set(id, prev);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.encounter.update({ where: { id }, data: { state: asJson(prev) } });
+      await tx.encounterUndo.delete({ where: { id: last.id } });
+    });
+
     return prev;
   }
 
@@ -92,43 +159,17 @@ export class EncounterService {
     return renderAnsi(idState);
   }
 
-  private pushUndo(id: string, prev: EncounterState) {
-    const stack = this.undoStore.get(id) ?? [];
-    stack.push(prev);
-
-    if (stack.length > MAX_UNDO) {
-      stack.splice(0, stack.length - MAX_UNDO);
-    }
-
-    this.undoStore.set(id, stack);
-  }
-
-  private async tryLoad(id: string): Promise<EncounterState | null> {
-    try {
-      await fs.mkdir(this.dataDir, { recursive: true });
-      const file = path.join(this.dataDir, `${id}.json`);
-      const raw = await fs.readFile(file, 'utf8');
-      return JSON.parse(raw);
-    } catch {
-      return null;
-    }
-  }
-
-  private async save(id: string, state: EncounterState) {
-    await fs.mkdir(this.dataDir, { recursive: true });
-    const file = path.join(this.dataDir, `${id}.json`);
-    await fs.writeFile(file, JSON.stringify(state, null, 2), 'utf8');
-  }
-
-  async setDefaultPublishChannel(id: string, channelId: string) {
-    const cur = await this.get(id);
+  async setDefaultPublishChannel(userId: string, id: string, channelId: string) {
+    const cur = await this.get(userId, id);
     const next = {
       ...cur,
       publish: { ...(cur.publish ?? {}), channelId },
       updatedAt: new Date().toISOString(),
     };
-    this.store.set(id, next);
-    await this.save(id, next); // 네 save가 private면 내부에서만 호출 가능하니 OK
+    await this.prisma.encounter.update({
+      where: { id },
+      data: { state: asJson(next) },
+    });
     return next;
   }
 
@@ -168,19 +209,21 @@ export class EncounterService {
       }
     }
 
-    // ✅ turnOrder에서 존재하지 않는 유닛 참조 제거
+    // turnOrder에서 존재하지 않는 유닛/마커 참조 제거
     const unitIds = new Set((next.units ?? []).map((u) => u.id));
+    const markerIds = new Set((next.markers ?? []).map((m: any) => m.id));
     const beforeLen = (next as any).turnOrder.length;
 
     (next as any).turnOrder = (next as any).turnOrder.filter((t: any) => {
       if (t?.kind === 'label') return true;
       if (t?.kind === 'unit') return unitIds.has(t.unitId);
+      if (t?.kind === 'marker') return markerIds.has(t.markerId);
       return false;
     });
 
     if ((next as any).turnOrder.length !== beforeLen) changed = true;
 
-    // ✅ turnIndex 보정: "유닛만 턴 주체" (label이면 첫 유닛으로)
+    // turnIndex 보정: "유닛만 턴 주체" (label이면 첫 유닛으로)
     const order = (next as any).turnOrder as any[];
     const unitIdxs = order
       .map((t, i) => (t?.kind === 'unit' ? i : -1))
@@ -189,13 +232,11 @@ export class EncounterService {
     const rawTi = Math.floor((next as any).turnIndex ?? 0);
 
     if (unitIdxs.length === 0) {
-      // 유닛이 없으면 0
       if ((next as any).turnIndex !== 0) {
         (next as any).turnIndex = 0;
         changed = true;
       }
     } else {
-      // 유닛이 있으면 "유닛 인덱스"로 보정
       if (
         !Number.isFinite(rawTi) ||
         rawTi < 0 ||
@@ -207,7 +248,7 @@ export class EncounterService {
       }
     }
 
-    // (선택) formationLines 제거
+    // legacy formationLines 제거
     if ((next as any).formationLines !== undefined) {
       delete (next as any).formationLines;
       changed = true;
@@ -220,24 +261,20 @@ export class EncounterService {
   coerceTurnIndexToUnitOnly(order: any[], start: number): number {
     if (!Array.isArray(order) || order.length === 0) return 0;
 
-    // 유닛 엔트리 인덱스 목록
     const unitIdxs: number[] = [];
     for (let i = 0; i < order.length; i++) {
       if (order[i]?.kind === 'unit') unitIdxs.push(i);
     }
     if (unitIdxs.length === 0) return 0;
 
-    // start 범위 보정
     const s = Number.isFinite(start)
       ? Math.max(0, Math.min(order.length - 1, start))
       : 0;
 
-    // start부터 뒤로 유닛 찾기
     for (let i = s; i < order.length; i++) {
       if (order[i]?.kind === 'unit') return i;
     }
 
-    // 없으면 첫 유닛으로 wrap
     return unitIdxs[0];
   }
 }

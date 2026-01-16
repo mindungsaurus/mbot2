@@ -40,6 +40,7 @@ export class EncounterService {
       markers: [],
       turnOrder: [],
       turnIndex: 0,
+      battleStarted: false,
       round: 1,
       updatedAt: now,
     };
@@ -183,6 +184,12 @@ export class EncounterService {
     // markers 기본값
     if (!Array.isArray((next as any).markers)) {
       (next as any).markers = [];
+      changed = true;
+    }
+
+    // battleStarted 기본값
+    if (typeof (next as any).battleStarted !== 'boolean') {
+      (next as any).battleStarted = false;
       changed = true;
     }
 

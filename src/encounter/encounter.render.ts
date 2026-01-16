@@ -146,6 +146,10 @@ export function renderAnsi(state: EncounterState): string {
 
   const lines: string[] = [];
 
+  if (!state.battleStarted) {
+    lines.push(`${color(31)}<전투 개시되지 않음>${RESET}`);
+  }
+
   lines.push(`${color(34)}Team${RESET}`);
   for (const u of team) lines.push(renderUnitLine(u));
   lines.push('');
@@ -204,6 +208,19 @@ function renderUnitLine(u: Unit): string {
 }
 
 function renderTurnLine(state: EncounterState): string {
+  if (!state.battleStarted) {
+    return state.turnOrder.map((t) => {
+      if (t.kind === 'label') return t.text;
+      if (t.kind === 'marker') {
+        const m = state.markers?.find((x) => x.id === t.markerId);
+        const label = m?.alias?.trim?.() || m?.name || t.markerId;
+        return `${label}`;
+      }
+      const u = state.units.find((x) => x.id === t.unitId);
+      return u?.alias?.trim?.() || u?.name || t.unitId;
+    }).join(' - ');
+  }
+
   const tempId = state.tempTurnStack?.length
     ? state.tempTurnStack[state.tempTurnStack.length - 1]
     : null;

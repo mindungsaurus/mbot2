@@ -84,6 +84,29 @@ export function applyActionInPlace(
   action: Action,
 ): void {
   switch (action.type) {
+    case 'BATTLE_START': {
+      if (state.battleStarted) return;
+
+      const order = Array.isArray(state.turnOrder) ? state.turnOrder : [];
+      state.battleStarted = true;
+      state.tempTurnStack = [];
+      delete state.tempTurnStack;
+
+      const r = Math.floor((state as any).round ?? 1);
+      (state as any).round = Number.isFinite(r) && r >= 1 ? r : 1;
+
+      state.turnIndex = 0;
+      if (order.length > 0) {
+        state.turnIndex = coerceTurnIndexToUnit(order, state.turnIndex);
+      }
+
+      const firstEntry = order[state.turnIndex];
+      const firstUnitId = firstEntry?.kind === 'unit' ? firstEntry.unitId : null;
+      const firstName = firstUnitId ? unitLabel(state, firstUnitId) : null;
+      const msg = firstName ? `전투 개시. 첫 턴: ${firstName}.` : '전투 개시.';
+      pushLog(state, 'ACTION', msg, action, makeLogCtx(state));
+      return;
+    }
     case 'APPLY_DAMAGE': {
       const ctx = makeLogCtx(state);
       const u = findUnit(state, action.unitId);
@@ -352,6 +375,7 @@ export function applyActionInPlace(
     }
 
     case 'GRANT_TEMP_TURN': {
+      if (!state.battleStarted) return;
       const ctxBefore = makeLogCtx(state);
       const id = (action.unitId ?? '').trim();
       if (!id) return;
@@ -408,6 +432,7 @@ export function applyActionInPlace(
     }
 
     case 'NEXT_TURN': {
+      if (!state.battleStarted) return;
       const ctxBefore = makeLogCtx(state);
       const order = Array.isArray(state.turnOrder) ? state.turnOrder : [];
       if (order.length === 0) return;
@@ -1273,6 +1298,7 @@ function coerceTurnIndexToUnit(order: TurnEntry[], start: any): number {
 }
 
 function getActiveTurnUnitId(state: EncounterState): string | null {
+  if (!state.battleStarted) return null;
   const top = state.tempTurnStack?.length
     ? state.tempTurnStack[state.tempTurnStack.length - 1]
     : null;
@@ -1340,6 +1366,7 @@ function getActiveTurnCtx(state: EncounterState): {
   isTemp: boolean;
   unitId: string | null;
 } {
+  if (!state.battleStarted) return { isTemp: false, unitId: null };
   const tempId = state.tempTurnStack?.length
     ? state.tempTurnStack[state.tempTurnStack.length - 1]
     : null;

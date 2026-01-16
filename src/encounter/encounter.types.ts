@@ -92,6 +92,7 @@ export interface EncounterState {
   markers?: Marker[];
   turnOrder: TurnEntry[];
   turnIndex: number;
+  battleStarted?: boolean;
 
   /** @deprecated (구버전 호환용) */
   formationLines?: string[];
@@ -192,6 +193,7 @@ export interface UnitPatch {
 // ---------- ACTION ----------
 
 export type Action =
+  | { type: 'BATTLE_START' }
   | { type: 'APPLY_DAMAGE'; unitId: string; amount: number }
   | { type: 'HEAL'; unitId: string; amount: number }
   | {

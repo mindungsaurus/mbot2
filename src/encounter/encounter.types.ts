@@ -64,6 +64,7 @@ export interface Unit {
 
   /** 숨겨짐: formation 등에서 노출하지 않음 */
   hidden?: boolean;
+  turnDisabled?: boolean;
 
   // 프리셋/버프(토글/스택)는 여기에만
   mods?: UnitMod[];
@@ -186,6 +187,7 @@ export interface UnitPatch {
   note?: string | null;
   colorCode?: number | null;
   hidden?: boolean | null;
+  turnDisabled?: boolean | null;
 
   presetStacks?: Record<string, StackPatch>;
 }

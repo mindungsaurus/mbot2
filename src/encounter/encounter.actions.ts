@@ -1,4 +1,4 @@
-// encounter.actions.ts
+﻿// encounter.actions.ts
 import {
   Action,
   EncounterState,
@@ -96,11 +96,13 @@ export function applyActionInPlace(
       (state as any).round = Number.isFinite(r) && r >= 1 ? r : 1;
 
       state.turnIndex = 0;
-      if (order.length > 0) {
-        state.turnIndex = coerceTurnIndexToUnit(order, state.turnIndex);
+      const activeIdxs = getUnitTurnIndices(order, state);
+      if (order.length > 0 && activeIdxs.length > 0) {
+        state.turnIndex = coerceTurnIndexToUnit(order, state.turnIndex, state);
       }
 
-      const firstEntry = order[state.turnIndex];
+      const firstEntry =
+        activeIdxs.length > 0 ? order[state.turnIndex] : null;
       const firstUnitId = firstEntry?.kind === 'unit' ? firstEntry.unitId : null;
       const firstName = firstUnitId ? unitLabel(state, firstUnitId) : null;
       const msg = firstName ? `전투 개시. 첫 턴: ${firstName}.` : '전투 개시.';
@@ -493,11 +495,11 @@ export function applyActionInPlace(
       }
 
       // 3) 정상 턴 진행: label 제외, unit만
-      const unitIdxs = getUnitTurnIndices(order);
+      const unitIdxs = getUnitTurnIndices(order, state);
       if (unitIdxs.length === 0) return;
 
       // turnIndex가 유닛이 아니면 첫 유닛으로 보정
-      state.turnIndex = coerceTurnIndexToUnit(order, state.turnIndex);
+      state.turnIndex = coerceTurnIndexToUnit(order, state.turnIndex, state);
 
       const ti = state.turnIndex;
       const pos = unitIdxs.indexOf(ti);
@@ -505,6 +507,54 @@ export function applyActionInPlace(
       const nextTi = unitIdxs[nextPos];
 
       const markerIds = getMarkerIdsBetween(order, ti, nextTi);
+      const disabledUnitIds = getDisabledUnitIdsBetween(
+        order,
+        ti,
+        nextTi,
+        state,
+      );
+
+      if (disabledUnitIds.length) {
+        // Turn-disabled units still apply start/end tag decays when passed.
+        for (const unitId of disabledUnitIds) {
+          const u = state.units.find((x) => x.id === unitId);
+          if (!u) continue;
+          normalizeUnit(u);
+
+          const startDecays = decTurnTags(u, 'start');
+          const endDecays = decTurnTags(u, 'end');
+
+          if (!startDecays.length && !endDecays.length) continue;
+
+          const ctxDisabled = makeUnitCtx(state, unitId);
+
+          if (startDecays.length) {
+            const txt = startDecays
+              .map((c) => `${c.tag} ${c.from}->${c.to}`)
+              .join(', ');
+            pushLog(
+              state,
+              'ACTION',
+              `${ctxDisabled.unitName ?? unitId} 태그 자동감소(시작): ${txt}.`,
+              action,
+              ctxDisabled,
+            );
+          }
+
+          if (endDecays.length) {
+            const txt = endDecays
+              .map((c) => `${c.tag} ${c.from}->${c.to}`)
+              .join(', ');
+            pushLog(
+              state,
+              'ACTION',
+              `${ctxDisabled.unitName ?? unitId} 태그 자동감소(종료): ${txt}.`,
+              action,
+              ctxDisabled,
+            );
+          }
+        }
+      }
 
       // 4) 라운드 증가: 마지막 유닛 -> 첫 유닛으로 넘어갈 때
       if (nextPos === 0) {
@@ -569,6 +619,7 @@ export function applyActionInPlace(
         : undefined;
       const beforeSlots = u.spellSlots ? { ...u.spellSlots } : undefined;
       const beforeHidden = !!u.hidden;
+      const beforeTurnDisabled = !!u.turnDisabled;
 
       applyUnitPatch(u, action.patch);
 
@@ -578,6 +629,7 @@ export function applyActionInPlace(
         : undefined;
       const afterSlots = u.spellSlots ? { ...u.spellSlots } : undefined;
       const afterHidden = !!u.hidden;
+      const afterTurnDisabled = !!u.turnDisabled;
 
       // 수동 tags 변화
       const { added, removed } = diffManualTags(beforeTags, afterTags);
@@ -660,6 +712,25 @@ export function applyActionInPlace(
           `${unitLabel(state, action.unitId)} 숨겨짐 ${afterHidden ? '적용' : '해제'}.`,
           action,
           ctx,
+        );
+      }
+      if (beforeTurnDisabled !== afterTurnDisabled) {
+        pushLog(
+          state,
+          'ACTION',
+          `${unitLabel(state, action.unitId)} 턴 비활성화${
+            afterTurnDisabled ? ' 적용' : ' 해제'
+          }.`,
+          action,
+          ctx,
+        );
+      }
+
+      if (!beforeTurnDisabled && afterTurnDisabled) {
+        state.turnIndex = coerceTurnIndexToUnit(
+          state.turnOrder,
+          state.turnIndex,
+          state,
         );
       }
 
@@ -855,7 +926,7 @@ export function applyActionInPlace(
       const wantsEntry = Number.isFinite(m.duration) && m.duration > 0;
 
       if (wantsEntry && !hasEntry) {
-        const insertAt = coerceTurnIndexToUnit(order, state.turnIndex);
+        const insertAt = coerceTurnIndexToUnit(order, state.turnIndex, state);
         order.splice(insertAt, 0, { kind: 'marker', markerId: id });
         if (insertAt <= state.turnIndex) state.turnIndex += 1;
       } else if (!wantsEntry && hasEntry) {
@@ -960,7 +1031,11 @@ export function applyActionInPlace(
       if (insertAt <= state.turnIndex) state.turnIndex += 1;
 
       state.turnIndex = clampTurnIndex(state.turnOrder, state.turnIndex);
-      state.turnIndex = coerceTurnIndexToUnit(state.turnOrder, state.turnIndex);
+      state.turnIndex = coerceTurnIndexToUnit(
+        state.turnOrder,
+        state.turnIndex,
+        state,
+      );
 
       // round 기본값 보정(없거나 이상하면 1)
       ensureRound(state);
@@ -1026,9 +1101,10 @@ export function applyActionInPlace(
         const baseIdx = coerceTurnIndexToUnit(
           filtered,
           clampTurnIndex(filtered, ti - removedBefore),
+          state,
         );
-        const next = findNextUnitIndex(filtered, baseIdx);
-        state.turnIndex = next ?? coerceTurnIndexToUnit(filtered, 0);
+        const next = findNextUnitIndex(filtered, baseIdx, state);
+        state.turnIndex = next ?? coerceTurnIndexToUnit(filtered, 0, state);
         pushLog(state, 'ACTION', `유닛 삭제: ${removedName}.`, action, ctx);
         return;
       }
@@ -1039,7 +1115,7 @@ export function applyActionInPlace(
       newIndex = Math.max(0, Math.min(filtered.length - 1, newIndex));
 
       state.turnIndex = clampTurnIndex(filtered, newIndex);
-      state.turnIndex = coerceTurnIndexToUnit(filtered, state.turnIndex);
+      state.turnIndex = coerceTurnIndexToUnit(filtered, state.turnIndex, state);
       pushLog(state, 'ACTION', `유닛 삭제: ${removedName}.`, action, ctx);
       return;
     }
@@ -1064,7 +1140,11 @@ export function applyActionInPlace(
 
       // label은 턴 주체가 아니므로, turnIndex가 label을 가리키면 가까운 unit으로 보정
       state.turnIndex = clampTurnIndex(state.turnOrder, tiAfter);
-      state.turnIndex = coerceTurnIndexToUnit(state.turnOrder, state.turnIndex);
+      state.turnIndex = coerceTurnIndexToUnit(
+        state.turnOrder,
+        state.turnIndex,
+        state,
+      );
 
       // 로그(원하면 더 자세히: moved entry 이름도 찍기)
       pushLog(state, 'ACTION', `턴 순서 변경: ${from} → ${to}.`, action, ctx);
@@ -1092,6 +1172,11 @@ function findUnit(state: EncounterState, unitId: string): Unit {
   const u = state.units.find((x) => x.id === unitId);
   if (!u) throw new Error(`unit not found: ${unitId}`);
   return u;
+}
+
+function isTurnDisabled(state: EncounterState, unitId: string): boolean {
+  const u = state.units.find((x) => x.id === unitId);
+  return !!u?.turnDisabled;
 }
 
 function normalizeUnit(u: Unit) {
@@ -1158,10 +1243,17 @@ function clampTurnIndex(order: TurnEntry[], idx: any): number {
   return Math.max(0, Math.min(order.length - 1, n));
 }
 
-function getUnitTurnIndices(order: TurnEntry[]): number[] {
+function getUnitTurnIndices(
+  order: TurnEntry[],
+  state?: EncounterState,
+): number[] {
   const out: number[] = [];
   for (let i = 0; i < order.length; i++) {
-    if (order[i]?.kind === 'unit') out.push(i);
+    const entry = order[i];
+    if (entry?.kind !== 'unit') continue;
+    // Skip turn-disabled units so they never receive a turn.
+    if (state && isTurnDisabled(state, entry.unitId)) continue;
+    out.push(i);
   }
   return out;
 }
@@ -1185,6 +1277,32 @@ function getMarkerIdsBetween(
         seen.add(t.markerId);
         out.push(t.markerId);
       }
+    }
+
+    if (i === toIdx) break;
+    i = (i + 1) % order.length;
+    if (i === start) break;
+  }
+
+  return out;
+}
+
+function getDisabledUnitIdsBetween(
+  order: TurnEntry[],
+  fromIdx: number,
+  toIdx: number,
+  state: EncounterState,
+): string[] {
+  if (!Array.isArray(order) || order.length === 0) return [];
+  const out: string[] = [];
+
+  let i = (fromIdx + 1) % order.length;
+  const start = i;
+
+  while (true) {
+    const t = order[i];
+    if (t?.kind === 'unit' && isTurnDisabled(state, t.unitId)) {
+      out.push(t.unitId);
     }
 
     if (i === toIdx) break;
@@ -1219,7 +1337,11 @@ function removeMarkerEntriesFromOrder(
   }
 
   state.turnIndex = clampTurnIndex(state.turnOrder, state.turnIndex);
-  state.turnIndex = coerceTurnIndexToUnit(state.turnOrder, state.turnIndex);
+  state.turnIndex = coerceTurnIndexToUnit(
+    state.turnOrder,
+    state.turnIndex,
+    state,
+  );
 }
 
 function tickMarkersOnPass(
@@ -1283,16 +1405,23 @@ function tickMarkersOnPass(
 }
 
 /** turnIndex가 label이면, start부터 뒤로 가며 unit을 찾고 없으면 첫 unit */
-function coerceTurnIndexToUnit(order: TurnEntry[], start: any): number {
+function coerceTurnIndexToUnit(
+  order: TurnEntry[],
+  start: any,
+  state?: EncounterState,
+): number {
   if (!Array.isArray(order) || order.length === 0) return 0;
 
-  const unitIdxs = getUnitTurnIndices(order);
+  const unitIdxs = getUnitTurnIndices(order, state);
   if (unitIdxs.length === 0) return 0;
 
   const s = clampTurnIndex(order, start);
 
   for (let i = s; i < order.length; i++) {
-    if (order[i]?.kind === 'unit') return i;
+    const entry = order[i];
+    if (entry?.kind !== 'unit') continue;
+    if (state && isTurnDisabled(state, entry.unitId)) continue;
+    return i;
   }
   return unitIdxs[0];
 }
@@ -1308,18 +1437,30 @@ function getActiveTurnUnitId(state: EncounterState): string | null {
   const order = Array.isArray(state.turnOrder) ? state.turnOrder : [];
   if (order.length === 0) return null;
 
-  state.turnIndex = coerceTurnIndexToUnit(order, state.turnIndex);
+  const unitIdxs = getUnitTurnIndices(order, state);
+  if (unitIdxs.length === 0) return null;
+
+  state.turnIndex = coerceTurnIndexToUnit(order, state.turnIndex, state);
   const t = order[state.turnIndex];
-  return t?.kind === 'unit' ? t.unitId : null;
+  if (t?.kind !== 'unit') return null;
+  if (isTurnDisabled(state, t.unitId)) return null;
+  return t.unitId;
 }
 
-function findNextUnitIndex(order: TurnEntry[], fromIdx: number): number | null {
+function findNextUnitIndex(
+  order: TurnEntry[],
+  fromIdx: number,
+  state?: EncounterState,
+): number | null {
   if (!Array.isArray(order) || order.length === 0) return null;
   const n = order.length;
 
   for (let step = 1; step <= n; step++) {
     const j = (fromIdx + step) % n;
-    if (order[j]?.kind === 'unit') return j;
+    const entry = order[j];
+    if (entry?.kind !== 'unit') continue;
+    if (state && isTurnDisabled(state, entry.unitId)) continue;
+    return j;
   }
   return null;
 }
@@ -1376,10 +1517,16 @@ function getActiveTurnCtx(state: EncounterState): {
   const order = Array.isArray(state.turnOrder) ? state.turnOrder : [];
   if (order.length === 0) return { isTemp: false, unitId: null };
 
+  const unitIdxs = getUnitTurnIndices(order, state);
+  if (unitIdxs.length === 0) return { isTemp: false, unitId: null };
+
   // label이면 unit으로 보정
-  state.turnIndex = coerceTurnIndexToUnit(order, state.turnIndex);
+  state.turnIndex = coerceTurnIndexToUnit(order, state.turnIndex, state);
   const t = order[state.turnIndex];
-  if (t?.kind === 'unit') return { isTemp: false, unitId: t.unitId };
+  if (t?.kind !== 'unit') return { isTemp: false, unitId: null };
+  if (isTurnDisabled(state, t.unitId))
+    return { isTemp: false, unitId: null };
+  return { isTemp: false, unitId: t.unitId };
 
   return { isTemp: false, unitId: null };
 }
@@ -1391,6 +1538,18 @@ function resolveUnitName(
   if (!unitId) return null;
   const u = state.units.find((x) => x.id === unitId);
   return u?.name ?? unitId;
+}
+
+function makeUnitCtx(
+  state: EncounterState,
+  unitId: string,
+): EncounterLogEntry['ctx'] {
+  return {
+    round: safeRound(state),
+    isTemp: false,
+    unitId,
+    unitName: resolveUnitName(state, unitId),
+  };
 }
 
 function makeLogCtx(state: EncounterState): EncounterLogEntry['ctx'] {
@@ -1592,6 +1751,14 @@ function applyUnitPatch(u: Unit, patch: UnitPatch) {
     }
   }
 
+  if (patch.turnDisabled !== undefined) {
+    if (patch.turnDisabled === null || patch.turnDisabled === false) {
+      delete u.turnDisabled;
+    } else {
+      u.turnDisabled = true;
+    }
+  }
+
   if (patch.ac !== undefined) {
     if (patch.ac === null) {
       delete u.acBase;
@@ -1771,3 +1938,4 @@ function applyUnitPatch(u: Unit, patch: UnitPatch) {
     if (Object.keys(u.tagStates).length === 0) delete u.tagStates;
   }
 }
+

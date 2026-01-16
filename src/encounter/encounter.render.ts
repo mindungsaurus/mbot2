@@ -20,6 +20,7 @@ const DEATH_SUCCESS_COLOR = color(36); // cyan
 const DEATH_FAILURE_COLOR = color(31); // red
 const SLOT_COLOR = color(34); // blue
 const CONSUMABLE_COLOR = color(33); // yellow
+const DISABLED_COLOR = '\x1b[1;30m';
 
 function colorNumber(value: number | string, tint: string) {
   return `${tint}${value}${RESET}`;
@@ -195,30 +196,43 @@ function renderUnitLine(u: Unit): string {
   const dsText = ds ? ` ${ds}` : '';
   const resourcesText = fmtResources(u);
   const tagsText = fmtTags(u);
+  const disabledPrefix = u.turnDisabled
+    ? `${DISABLED_COLOR}[턴 비활성화]${RESET} `
+    : '';
 
   if (!u.hp && getComputedAc(u) === undefined) {
     const text = u.note ?? u.name;
-    return `${unitColor(u)}${text}${RESET}${resourcesText}${dsText}${tagsText}`;
+    return `${disabledPrefix}${unitColor(u)}${text}${RESET}${resourcesText}${dsText}${tagsText}`;
   }
 
   const hp = fmtHp(u);
   const ac = fmtAc(u);
-  let left = `${unitColor(u)}${u.name} ${GRAY}- ${hp} / ${AC_COLOR}${ac}${RESET}`;
+  let left = `${disabledPrefix}${unitColor(u)}${u.name} ${GRAY}- ${hp} / ${AC_COLOR}${ac}${RESET}`;
   return left + resourcesText + dsText + tagsText;
 }
 
 function renderTurnLine(state: EncounterState): string {
   if (!state.battleStarted) {
-    return state.turnOrder.map((t) => {
-      if (t.kind === 'label') return t.text;
-      if (t.kind === 'marker') {
-        const m = state.markers?.find((x) => x.id === t.markerId);
-        const label = m?.alias?.trim?.() || m?.name || t.markerId;
-        return `${label}`;
-      }
-      const u = state.units.find((x) => x.id === t.unitId);
-      return u?.alias?.trim?.() || u?.name || t.unitId;
-    }).join(' - ');
+    const parts = state.turnOrder
+      .map((t) => {
+        if (t.kind === 'label') return t.text;
+        if (t.kind === 'marker') {
+          const m = state.markers?.find((x) => x.id === t.markerId);
+          const duration = Number(m?.duration ?? 0);
+          const hasDuration = m
+            ? Number.isFinite(duration) && duration > 0
+            : true;
+          if (!hasDuration) return '';
+          const label = m?.alias?.trim?.() || m?.name || t.markerId;
+          return `${DISABLED_COLOR}[${label}]${color(38)}`;
+        }
+        const u = state.units.find((x) => x.id === t.unitId);
+        const label = u?.alias?.trim?.() || u?.name || t.unitId;
+        if (u?.turnDisabled) return `${DISABLED_COLOR}${label}${color(38)}`;
+        return label;
+      })
+      .filter(Boolean);
+    return parts.join(' - ');
   }
 
   const tempId = state.tempTurnStack?.length
@@ -235,25 +249,27 @@ function renderTurnLine(state: EncounterState): string {
     if (idx >= 0) activeIndex = idx;
   }
 
-  const parts = state.turnOrder.map((t, i) => {
+  const parts = state.turnOrder
+    .map((t, i) => {
     const isActive = i === activeIndex;
     const highlight = (text: string) => `${color(36)}${text}${color(38)}`;
 
     if (t.kind === 'label') return t.text;
     if (t.kind === 'marker') {
       const m = state.markers?.find((x) => x.id === t.markerId);
+      const duration = Number(m?.duration ?? 0);
+      const hasDuration = m ? Number.isFinite(duration) && duration > 0 : true;
+      if (!hasDuration) return '';
       const label = m?.alias?.trim?.() || m?.name || t.markerId;
-      return `${label}`;
+      return `${DISABLED_COLOR}[${label}]${color(38)}`;
     }
     const u = state.units.find((x) => x.id === t.unitId);
     const label = u?.alias?.trim?.() || u?.name || t.unitId;
     const name = `${label}`;
+    if (u?.turnDisabled) return `${DISABLED_COLOR}${name}${color(38)}`;
     return isActive ? highlight(name) : name;
-  });
-
-  if (tempId) {
-    return parts.join(' - ');
-  }
+  })
+  .filter(Boolean);
 
   return parts.join(' - ');
 }

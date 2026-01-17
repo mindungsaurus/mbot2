@@ -1,5 +1,6 @@
 // encounter.types.ts
 export type Side = 'TEAM' | 'ENEMY' | 'NEUTRAL';
+export type BenchGroup = 'TEAM' | 'ENEMY';
 
 export interface Hp {
   cur: number;
@@ -45,6 +46,7 @@ export interface TurnTagState {
 export interface Unit {
   id: string;
   side: Side;
+  bench?: BenchGroup;
   name: string;
 
   hp?: Hp;
@@ -174,6 +176,7 @@ export type StackPatch = number | { delta: number } | null;
 
 export interface UnitPatch {
   name?: string;
+  side?: Side;
   ac?: NumPatch | null; // base AC 수정
   integrity?: NumPatch | null; // base integrity 수정
   hp?: HpPatch | null;
@@ -188,6 +191,7 @@ export interface UnitPatch {
   colorCode?: number | null;
   hidden?: boolean | null;
   turnDisabled?: boolean | null;
+  bench?: BenchGroup | null;
 
   presetStacks?: Record<string, StackPatch>;
 }
@@ -217,6 +221,8 @@ export type Action =
   | { type: 'TOGGLE_TAG'; unitId: string; tag: string }
   | { type: 'TOGGLE_HIDDEN'; unitId: string; hidden?: boolean }
   | { type: 'NEXT_TURN' }
+  | { type: 'SET_UNIT_LIST_ORDER'; unitIds: string[] }
+  | { type: 'SET_UNIT_BENCH'; unitId: string; bench?: BenchGroup | null }
   | { type: 'PATCH_UNIT'; unitId: string; patch: UnitPatch }
   | {
       type: 'SET_PRESET';
@@ -250,6 +256,7 @@ export type Action =
       name: string;
       alias?: string;
       side: Side;
+  bench?: BenchGroup;
       x: number;
       z: number;
       hpMax: number;

@@ -17,6 +17,12 @@ function asJson(value: unknown): Prisma.InputJsonValue {
   return value as Prisma.InputJsonValue;
 }
 
+function isUnitOrderOnly(body: Action | Action[]): boolean {
+  const actions = Array.isArray(body) ? body : [body];
+  if (actions.length === 0) return false;
+  return actions.every((a) => a?.type === 'SET_UNIT_LIST_ORDER');
+}
+
 @Injectable()
 export class EncounterService {
   constructor(private readonly prisma: PrismaClient) {}
@@ -102,29 +108,39 @@ export class EncounterService {
     next.id = id;
     next.updatedAt = new Date().toISOString();
 
-    await this.prisma.$transaction(async (tx) => {
-      await tx.encounterUndo.create({
-        data: { encounterId: id, state: asJson(prevSnapshot) },
+    if (isUnitOrderOnly(body)) {
+      await this.prisma.encounter.update({
+        where: { id },
+        data: { state: asJson(next) },
       });
-      await tx.encounter.update({ where: { id }, data: { state: asJson(next) } });
-
-      const count = await tx.encounterUndo.count({
-        where: { encounterId: id },
-      });
-      if (count > MAX_UNDO) {
-        const old = await tx.encounterUndo.findMany({
-          where: { encounterId: id },
-          orderBy: { createdAt: 'asc' },
-          take: count - MAX_UNDO,
-          select: { id: true },
+    } else {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.encounterUndo.create({
+          data: { encounterId: id, state: asJson(prevSnapshot) },
         });
-        if (old.length) {
-          await tx.encounterUndo.deleteMany({
-            where: { id: { in: old.map((o) => o.id) } },
+        await tx.encounter.update({
+          where: { id },
+          data: { state: asJson(next) },
+        });
+
+        const count = await tx.encounterUndo.count({
+          where: { encounterId: id },
+        });
+        if (count > MAX_UNDO) {
+          const old = await tx.encounterUndo.findMany({
+            where: { encounterId: id },
+            orderBy: { createdAt: 'asc' },
+            take: count - MAX_UNDO,
+            select: { id: true },
           });
+          if (old.length) {
+            await tx.encounterUndo.deleteMany({
+              where: { id: { in: old.map((o) => o.id) } },
+            });
+          }
         }
-      }
-    });
+      });
+    }
 
     return next;
   }
@@ -156,8 +172,11 @@ export class EncounterService {
     return prev;
   }
 
-  render(idState: EncounterState): string {
-    return renderAnsi(idState);
+  render(
+    idState: EncounterState,
+    opts?: { hideBench?: boolean; hideBenchTeam?: boolean; hideBenchEnemy?: boolean },
+  ): string {
+    return renderAnsi(idState, opts);
   }
 
   async setDefaultPublishChannel(userId: string, id: string, channelId: string) {

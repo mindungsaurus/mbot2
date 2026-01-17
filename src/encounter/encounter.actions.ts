@@ -620,6 +620,7 @@ export function applyActionInPlace(
       const beforeSlots = u.spellSlots ? { ...u.spellSlots } : undefined;
       const beforeHidden = !!u.hidden;
       const beforeTurnDisabled = !!u.turnDisabled;
+      const beforeSide = u.side;
 
       applyUnitPatch(u, action.patch);
 
@@ -630,6 +631,7 @@ export function applyActionInPlace(
       const afterSlots = u.spellSlots ? { ...u.spellSlots } : undefined;
       const afterHidden = !!u.hidden;
       const afterTurnDisabled = !!u.turnDisabled;
+      const afterSide = u.side;
 
       // 수동 tags 변화
       const { added, removed } = diffManualTags(beforeTags, afterTags);
@@ -721,6 +723,16 @@ export function applyActionInPlace(
           `${unitLabel(state, action.unitId)} 턴 비활성화${
             afterTurnDisabled ? ' 적용' : ' 해제'
           }.`,
+          action,
+          ctx,
+        );
+      }
+
+      if (beforeSide !== afterSide) {
+        pushLog(
+          state,
+          'ACTION',
+          `${unitLabel(state, action.unitId)} 진영 변경: ${beforeSide} -> ${afterSide}.`,
           action,
           ctx,
         );
@@ -1151,6 +1163,146 @@ export function applyActionInPlace(
       return;
     }
 
+    case 'SET_UNIT_LIST_ORDER': {
+      const rawIds = Array.isArray(action.unitIds) ? action.unitIds : [];
+      if (rawIds.length === 0) return;
+
+      const unitMap = new Map<string, Unit>();
+      for (const u of state.units ?? []) unitMap.set(u.id, u);
+
+      const nextOrder: string[] = [];
+      const seen = new Set<string>();
+      for (const raw of rawIds) {
+        const id = (raw ?? '').trim();
+        if (!id || seen.has(id)) continue;
+        if (!unitMap.has(id)) continue;
+        seen.add(id);
+        nextOrder.push(id);
+      }
+
+      for (const u of state.units ?? []) {
+        if (seen.has(u.id)) continue;
+        nextOrder.push(u.id);
+      }
+
+      if (nextOrder.length === 0) return;
+
+      const nextUnits: Unit[] = [];
+      for (const id of nextOrder) {
+        const u = unitMap.get(id);
+        if (u) nextUnits.push(u);
+      }
+      state.units = nextUnits;
+      return;
+    }
+
+
+
+    case 'SET_UNIT_BENCH': {
+      const ctx = makeLogCtx(state);
+
+      const id = (action.unitId ?? '').trim();
+      if (!id) return;
+
+      if (!('bench' in action)) return;
+
+      const u = findUnit(state, id);
+      normalizeUnit(u);
+
+      const prevBench = u.bench;
+      const rawBench = action.bench as any;
+      let nextBench: 'TEAM' | 'ENEMY' | undefined = undefined;
+      if (rawBench === 'TEAM' || rawBench === 'ENEMY') {
+        nextBench = rawBench;
+      } else if (rawBench === null) {
+        nextBench = undefined;
+      } else {
+        return;
+      }
+
+      if (prevBench === nextBench) return;
+
+      if (nextBench) {
+        u.bench = nextBench;
+
+        if (state.tempTurnStack?.length) {
+          state.tempTurnStack = state.tempTurnStack.filter((x) => x !== id);
+          if (state.tempTurnStack.length === 0) delete state.tempTurnStack;
+        }
+
+        const order = Array.isArray(state.turnOrder) ? state.turnOrder : [];
+        const ti = clampTurnIndex(order, state.turnIndex);
+        const activeId = getActiveTurnUnitId(state);
+
+        let removedBefore = 0;
+        for (let i = 0; i < order.length; i++) {
+          const t = order[i];
+          if (t?.kind === 'unit' && t.unitId === id) {
+            if (i < ti) removedBefore++;
+          }
+        }
+
+        const filtered = order.filter((t: any) => {
+          if (t?.kind === 'label') return true;
+          if (t?.kind === 'marker') return true;
+          if (t?.kind === 'unit') return t.unitId !== id;
+          return false;
+        });
+
+        state.turnOrder = filtered;
+
+        if (filtered.length === 0) {
+          state.turnIndex = 0;
+        } else if (activeId === id) {
+          const baseIdx = coerceTurnIndexToUnit(
+            filtered,
+            clampTurnIndex(filtered, ti - removedBefore),
+            state,
+          );
+          const next = findNextUnitIndex(filtered, baseIdx, state);
+          state.turnIndex = next ?? coerceTurnIndexToUnit(filtered, 0, state);
+        } else {
+          let newIndex = ti - removedBefore;
+          if (!Number.isFinite(newIndex)) newIndex = 0;
+          newIndex = Math.max(0, Math.min(filtered.length - 1, newIndex));
+          state.turnIndex = clampTurnIndex(filtered, newIndex);
+          state.turnIndex = coerceTurnIndexToUnit(
+            filtered,
+            state.turnIndex,
+            state,
+          );
+        }
+
+        pushLog(
+          state,
+          'ACTION',
+          `${unitLabel(state, id)} 대기석 이동: ${nextBench} 대기석.`,
+          action,
+          ctx,
+        );
+        return;
+      }
+
+      delete u.bench;
+      state.turnOrder ??= [];
+      state.turnOrder.push({ kind: 'unit', unitId: id });
+      if (typeof state.turnIndex !== 'number') state.turnIndex = 0;
+      state.turnIndex = clampTurnIndex(state.turnOrder, state.turnIndex);
+      state.turnIndex = coerceTurnIndexToUnit(
+        state.turnOrder,
+        state.turnIndex,
+        state,
+      );
+
+      pushLog(
+        state,
+        'ACTION',
+        `${unitLabel(state, id)} 투입 (대기석 해제).`,
+        action,
+        ctx,
+      );
+      return;
+    }
     default:
       return;
   }
@@ -1733,6 +1885,10 @@ function applyTagStacksPatch(cur: number, op: TagStacksPatch): number {
 function applyUnitPatch(u: Unit, patch: UnitPatch) {
   if (patch.name !== undefined) u.name = patch.name;
 
+  if (patch.side !== undefined && isSide(patch.side)) {
+    u.side = patch.side;
+  }
+
   if (patch.note !== undefined) {
     if (patch.note === null) delete u.note;
     else u.note = patch.note;
@@ -1756,6 +1912,14 @@ function applyUnitPatch(u: Unit, patch: UnitPatch) {
       delete u.turnDisabled;
     } else {
       u.turnDisabled = true;
+    }
+  }
+
+  if (patch.bench !== undefined) {
+    if (patch.bench === null) {
+      delete u.bench;
+    } else if (patch.bench === 'TEAM' || patch.bench === 'ENEMY') {
+      u.bench = patch.bench;
     }
   }
 

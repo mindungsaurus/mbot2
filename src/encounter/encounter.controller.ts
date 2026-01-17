@@ -16,7 +16,10 @@ import { AuthGuard } from '../auth/auth.guard';
 import type { AuthRequest } from '../auth/auth.types';
 
 type PublishBody = {
-  channelId: string; // "<#123...>"도 허용
+  channelId: string; // "<#123...>"???�용
+  hideBench?: boolean;
+  hideBenchTeam?: boolean;
+  hideBenchEnemy?: boolean;
 };
 
 type CreateEncounterBody = {
@@ -55,8 +58,7 @@ export class EncounterController {
     return this.encounter.apply(req.user.id, id, body);
   }
 
-  // (옵션) 프론트에서 "내가 보내려는 ANSI" 미리보기 용
-  @Get(':id/render')
+  // (?�션) ?�론?�에??"?��? 보내?�는 ANSI" 미리보기 ??  @Get(':id/render')
   async render(@Req() req: AuthRequest, @Param('id') id: string) {
     const state = await this.encounter.get(req.user.id, id);
     return { ansi: this.encounter.render(state) };
@@ -70,17 +72,24 @@ export class EncounterController {
   ) {
     const channelId = sanitizeChannelId(body?.channelId);
     if (!channelId) {
-      throw new BadRequestException('channelId가 필요합니다.');
+      throw new BadRequestException('channelId가 ?�요?�니??');
     }
 
     const state = await this.encounter.get(req.user.id, id);
-    const ansi = this.encounter.render(state);
+    const hideBench = !!body?.hideBench;
+    const hideBenchTeam = hideBench || !!body?.hideBenchTeam;
+    const hideBenchEnemy = hideBench || !!body?.hideBenchEnemy;
+    const ansi = this.encounter.render(state, {
+      hideBench,
+      hideBenchTeam,
+      hideBenchEnemy,
+    });
 
-    await this.publisher.sendAnsiToChannel(channelId, ansi); // ✅ 항상 새 메시지
+    await this.publisher.sendAnsiToChannel(channelId, ansi); // ????�� ??메시지
     return { ok: true, channelId };
   }
 
-  // undo: 마지막 apply(요청 1번) 되돌리기
+  // undo: 마�?�?apply(?�청 1�? ?�돌리기
   @Post(':id/undo')
   async undo(@Req() req: AuthRequest, @Param('id') id: string) {
     return this.encounter.undo(req.user.id, id);
@@ -90,7 +99,7 @@ export class EncounterController {
 function sanitizeChannelId(input?: string): string {
   const s = (input ?? '').trim();
   if (!s) return '';
-  // <#1234567890> 또는 그냥 숫자 ID 모두 처리
+  // <#1234567890> ?�는 그냥 ?�자 ID 모두 처리
   const digits = s.replace(/\D/g, '');
   return digits;
 }

@@ -29,6 +29,7 @@ export function buildFormationLines(
   // 유닛 수집
   for (const u of state.units ?? []) {
     if (u.hidden) continue;
+    if ((u as any).bench) continue;
     if (!u.pos) continue;
     const baseLabel = (u.alias ?? '').trim() || u.name;
     const label = opts?.formatUnitLabel

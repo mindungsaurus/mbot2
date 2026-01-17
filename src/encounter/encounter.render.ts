@@ -26,33 +26,28 @@ function colorNumber(value: number | string, tint: string) {
   return `${tint}${value}${RESET}`;
 }
 
+type RenderOptions = {
+  hideBench?: boolean;
+  hideBenchTeam?: boolean;
+  hideBenchEnemy?: boolean;
+};
+
 function unitColor(u: Unit) {
   if (typeof u.colorCode === 'number') return color(u.colorCode);
+  const bench = (u as any).bench;
+  if (bench === 'TEAM') return color(34);
+  if (bench === 'ENEMY') return color(31);
   if (u.side === 'TEAM') return color(34);
   if (u.side === 'ENEMY') return color(31);
   return color(90); // NEUTRAL
 }
 
-function extraTurnTags(u: Unit): string[] {
-  if (!u.tagStates) return [];
-  const out: string[] = [];
-  for (const [k, st] of Object.entries(u.tagStates)) {
-    const tag = (k ?? '').trim();
-    if (!tag) continue;
-    const n = Math.max(0, Math.floor(st?.stacks ?? 0));
-    if (n <= 0) continue;
-    out.push(n === 1 ? tag : `${tag} x${n}`);
-  }
-  return out;
-}
-
 function fmtTags(u: Unit) {
   const base = getDisplayTags(u);
-  const extra = extraTurnTags(u);
 
   const seen = new Set<string>();
   const all: string[] = [];
-  for (const t of [...base, ...extra]) {
+  for (const t of base) {
     const s = (t ?? '').trim();
     if (!s || seen.has(s)) continue;
     seen.add(s);
@@ -140,10 +135,21 @@ function fmtAc(u: Unit) {
   return `AC.${base}(${ds})`;
 }
 
-export function renderAnsi(state: EncounterState): string {
-  const team = state.units.filter((u) => u.side === 'TEAM');
-  const enemy = state.units.filter((u) => u.side === 'ENEMY');
-  const neutral = state.units.filter((u) => u.side === 'NEUTRAL');
+export function renderAnsi(state: EncounterState, opts?: RenderOptions): string {
+  const hideBench = !!opts?.hideBench;
+  const hideBenchTeam = hideBench || !!opts?.hideBenchTeam;
+  const hideBenchEnemy = hideBench || !!opts?.hideBenchEnemy;
+  // Active units render in main sections; bench units are listed separately unless hidden.
+  const activeUnits = (state.units ?? []).filter((u) => !(u as any).bench);
+  const team = activeUnits.filter((u) => u.side === 'TEAM');
+  const enemy = activeUnits.filter((u) => u.side === 'ENEMY');
+  const neutral = activeUnits.filter((u) => u.side === 'NEUTRAL');
+  const benchTeam = hideBenchTeam
+    ? []
+    : (state.units ?? []).filter((u) => (u as any).bench === 'TEAM');
+  const benchEnemy = hideBenchEnemy
+    ? []
+    : (state.units ?? []).filter((u) => (u as any).bench === 'ENEMY');
 
   const lines: string[] = [];
 
@@ -153,10 +159,18 @@ export function renderAnsi(state: EncounterState): string {
 
   lines.push(`${color(34)}Team${RESET}`);
   for (const u of team) lines.push(renderUnitLine(u));
+  if (benchTeam.length) {
+    lines.push(`${DISABLED_COLOR}===============${RESET}`);
+    for (const u of benchTeam) lines.push(renderUnitLine(u));
+  }
   lines.push('');
 
   lines.push(`${color(31)}Enemy${RESET}`);
   for (const u of enemy) lines.push(renderUnitLine(u));
+  if (benchEnemy.length) {
+    lines.push(`${DISABLED_COLOR}===============${RESET}`);
+    for (const u of benchEnemy) lines.push(renderUnitLine(u));
+  }
   lines.push('');
 
   if (neutral.length) {
@@ -227,6 +241,7 @@ function renderTurnLine(state: EncounterState): string {
           return `${DISABLED_COLOR}[${label}]${color(38)}`;
         }
         const u = state.units.find((x) => x.id === t.unitId);
+        if ((u as any)?.bench) return '';
         const label = u?.alias?.trim?.() || u?.name || t.unitId;
         if (u?.turnDisabled) return `${DISABLED_COLOR}${label}${color(38)}`;
         return label;
@@ -264,6 +279,7 @@ function renderTurnLine(state: EncounterState): string {
       return `${DISABLED_COLOR}[${label}]${color(38)}`;
     }
     const u = state.units.find((x) => x.id === t.unitId);
+    if ((u as any)?.bench) return '';
     const label = u?.alias?.trim?.() || u?.name || t.unitId;
     const name = `${label}`;
     if (u?.turnDisabled) return `${DISABLED_COLOR}${name}${color(38)}`;

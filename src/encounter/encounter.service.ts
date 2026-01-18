@@ -224,6 +224,10 @@ export class EncounterService {
       (next as any).turnOrder = [];
       changed = true;
     }
+    if (!Array.isArray((next as any).turnGroups)) {
+      (next as any).turnGroups = [];
+      changed = true;
+    }
 
     // pos 없는 유닛 자동 배치: z=0, x는 0부터 순서대로
     let xCursor = 0;
@@ -235,29 +239,77 @@ export class EncounterService {
       }
     }
 
-    // turnOrder에서 존재하지 않는 유닛/마커 참조 제거
+    // turnOrder에서 존재하지 않는 유닛/마커/그룹 참조 제거
     const unitIds = new Set((next.units ?? []).map((u) => u.id));
     const markerIds = new Set((next.markers ?? []).map((m: any) => m.id));
+    const unitMap = new Map((next.units ?? []).map((u) => [u.id, u]));
+    const rawGroups = Array.isArray((next as any).turnGroups)
+      ? (next as any).turnGroups
+      : [];
+    const normalizedGroups: any[] = [];
+    const seenGroupIds = new Set<string>();
+    const groupedUnitIds = new Set<string>();
+
+    for (const raw of rawGroups) {
+      const id = String(raw?.id ?? '').trim();
+      if (!id || seenGroupIds.has(id)) continue;
+      seenGroupIds.add(id);
+
+      const name = String(raw?.name ?? '').trim() || id;
+      const unitIdsRaw = Array.isArray(raw?.unitIds) ? raw.unitIds : [];
+      const unitIds: string[] = [];
+      const seenUnits = new Set<string>();
+
+      for (const rawId of unitIdsRaw) {
+        const unitId = String(rawId ?? '').trim();
+        if (!unitId || seenUnits.has(unitId) || groupedUnitIds.has(unitId))
+          continue;
+        const u = unitMap.get(unitId);
+        if (!u) continue;
+        if ((u as any).bench) continue;
+        const t = (u as any).unitType;
+        if (t && t !== 'NORMAL') continue;
+        if ((u as any).turnDisabled) continue;
+        seenUnits.add(unitId);
+        groupedUnitIds.add(unitId);
+        unitIds.push(unitId);
+      }
+
+      if (unitIds.length === 0) continue;
+      normalizedGroups.push({ id, name, unitIds });
+    }
+
+    if (JSON.stringify(rawGroups) !== JSON.stringify(normalizedGroups)) {
+      (next as any).turnGroups = normalizedGroups;
+      changed = true;
+    } else {
+      (next as any).turnGroups = normalizedGroups;
+    }
+
     const beforeLen = (next as any).turnOrder.length;
 
     (next as any).turnOrder = (next as any).turnOrder.filter((t: any) => {
       if (t?.kind === 'label') return true;
-      if (t?.kind === 'unit') return unitIds.has(t.unitId);
+      if (t?.kind === 'unit')
+        return unitIds.has(t.unitId) && !groupedUnitIds.has(t.unitId);
       if (t?.kind === 'marker') return markerIds.has(t.markerId);
+      if (t?.kind === 'group') return seenGroupIds.has(t.groupId);
       return false;
     });
 
     if ((next as any).turnOrder.length !== beforeLen) changed = true;
 
-    // turnIndex 보정: "유닛만 턴 주체" (label이면 첫 유닛으로)
+    // turnIndex 보정: "유닛/그룹만 턴 주체" (label이면 첫 턴 엔트리로)
     const order = (next as any).turnOrder as any[];
-    const unitIdxs = order
-      .map((t, i) => (t?.kind === 'unit' ? i : -1))
+    const entryIdxs = order
+      .map((t, i) =>
+        t?.kind === 'unit' || t?.kind === 'group' ? i : -1,
+      )
       .filter((i) => i >= 0);
 
     const rawTi = Math.floor((next as any).turnIndex ?? 0);
 
-    if (unitIdxs.length === 0) {
+    if (entryIdxs.length === 0) {
       if ((next as any).turnIndex !== 0) {
         (next as any).turnIndex = 0;
         changed = true;
@@ -267,9 +319,9 @@ export class EncounterService {
         !Number.isFinite(rawTi) ||
         rawTi < 0 ||
         rawTi >= order.length ||
-        order[rawTi]?.kind !== 'unit'
+        (order[rawTi]?.kind !== 'unit' && order[rawTi]?.kind !== 'group')
       ) {
-        (next as any).turnIndex = unitIdxs[0];
+        (next as any).turnIndex = entryIdxs[0];
         changed = true;
       }
     }
@@ -287,20 +339,21 @@ export class EncounterService {
   coerceTurnIndexToUnitOnly(order: any[], start: number): number {
     if (!Array.isArray(order) || order.length === 0) return 0;
 
-    const unitIdxs: number[] = [];
+    const entryIdxs: number[] = [];
     for (let i = 0; i < order.length; i++) {
-      if (order[i]?.kind === 'unit') unitIdxs.push(i);
+      if (order[i]?.kind === 'unit' || order[i]?.kind === 'group')
+        entryIdxs.push(i);
     }
-    if (unitIdxs.length === 0) return 0;
+    if (entryIdxs.length === 0) return 0;
 
     const s = Number.isFinite(start)
       ? Math.max(0, Math.min(order.length - 1, start))
       : 0;
 
     for (let i = s; i < order.length; i++) {
-      if (order[i]?.kind === 'unit') return i;
+      if (order[i]?.kind === 'unit' || order[i]?.kind === 'group') return i;
     }
 
-    return unitIdxs[0];
+    return entryIdxs[0];
   }
 }

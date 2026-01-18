@@ -1,6 +1,12 @@
 // encounter.types.ts
 export type Side = 'TEAM' | 'ENEMY' | 'NEUTRAL';
 export type BenchGroup = 'TEAM' | 'ENEMY';
+export type UnitType = 'NORMAL' | 'SERVANT' | 'BUILDING';
+export type TurnGroup = {
+  id: string;
+  name: string;
+  unitIds: string[];
+};
 
 export interface Hp {
   cur: number;
@@ -47,6 +53,8 @@ export interface Unit {
   id: string;
   side: Side;
   bench?: BenchGroup;
+  unitType?: UnitType;
+  masterUnitId?: string;
   name: string;
 
   hp?: Hp;
@@ -87,13 +95,15 @@ export interface Unit {
 export type TurnEntry =
   | { kind: 'unit'; unitId: string }
   | { kind: 'label'; text: string }
-  | { kind: 'marker'; markerId: string };
+  | { kind: 'marker'; markerId: string }
+  | { kind: 'group'; groupId: string };
 
 export interface EncounterState {
   id: string;
   units: Unit[];
   markers?: Marker[];
   turnOrder: TurnEntry[];
+  turnGroups?: TurnGroup[];
   turnIndex: number;
   battleStarted?: boolean;
 
@@ -177,6 +187,9 @@ export type StackPatch = number | { delta: number } | null;
 export interface UnitPatch {
   name?: string;
   side?: Side;
+  alias?: string | null;
+  unitType?: UnitType;
+  masterUnitId?: string | null;
   ac?: NumPatch | null; // base AC 수정
   integrity?: NumPatch | null; // base integrity 수정
   hp?: HpPatch | null;
@@ -253,10 +266,13 @@ export type Action =
   | { type: 'REMOVE_MARKER'; markerId: string }
   | {
       type: 'CREATE_UNIT';
+      unitId?: string;
       name: string;
       alias?: string;
       side: Side;
   bench?: BenchGroup;
+      unitType?: UnitType;
+      masterUnitId?: string;
       x: number;
       z: number;
       hpMax: number;
@@ -266,4 +282,9 @@ export type Action =
     }
   | { type: 'REMOVE_UNIT'; unitId: string }
   | { type: 'GRANT_TEMP_TURN'; unitId: string }
-  | { type: 'MOVE_TURN_ENTRY'; fromIndex: number; toIndex: number };
+  | { type: 'MOVE_TURN_ENTRY'; fromIndex: number; toIndex: number }
+  | {
+      type: 'SET_TURN_ORDER';
+      turnOrder: TurnEntry[];
+      turnGroups?: TurnGroup[];
+    };

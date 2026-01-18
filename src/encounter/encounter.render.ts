@@ -42,6 +42,48 @@ function unitColor(u: Unit) {
   return color(90); // NEUTRAL
 }
 
+function normalizeUnitType(u: Unit): 'NORMAL' | 'SERVANT' | 'BUILDING' {
+  const t = (u as any).unitType;
+  if (t === 'SERVANT' || t === 'BUILDING' || t === 'NORMAL') return t;
+  return 'NORMAL';
+}
+
+function unitTypePrefix(u: Unit): string {
+  const t = normalizeUnitType(u);
+  if (t === 'SERVANT') return '[S]';
+  if (t === 'BUILDING') return '[B]';
+  return '';
+}
+
+function formatUnitLabel(u: Unit, base: string): string {
+  const prefix = unitTypePrefix(u);
+  return prefix ? `${prefix}${base}` : base;
+}
+
+function groupLabel(state: EncounterState, groupId: string): string {
+  const g = Array.isArray(state.turnGroups)
+    ? state.turnGroups.find((x) => x.id === groupId)
+    : null;
+  return g?.name ?? groupId;
+}
+
+function groupHasMembers(state: EncounterState, groupId: string): boolean {
+  const g = Array.isArray(state.turnGroups)
+    ? state.turnGroups.find((x) => x.id === groupId)
+    : null;
+  if (!g) return false;
+  if (!Array.isArray(g.unitIds) || g.unitIds.length === 0) return false;
+  for (const id of g.unitIds) {
+    const u = state.units.find((x) => x.id === id);
+    if (!u) continue;
+    if ((u as any)?.bench) continue;
+    if (normalizeUnitType(u) !== 'NORMAL') continue;
+    if (u.turnDisabled) continue;
+    return true;
+  }
+  return false;
+}
+
 function fmtTags(u: Unit) {
   const base = getDisplayTags(u);
 
@@ -211,17 +253,18 @@ function renderUnitLine(u: Unit): string {
   const resourcesText = fmtResources(u);
   const tagsText = fmtTags(u);
   const disabledPrefix = u.turnDisabled
-    ? `${DISABLED_COLOR}[턴 비활성화]${RESET} `
+    ? `${DISABLED_COLOR}[\uD134 \uBE44\uD65C\uC131\uD654]${RESET} `
     : '';
 
   if (!u.hp && getComputedAc(u) === undefined) {
-    const text = u.note ?? u.name;
+    const text = formatUnitLabel(u, u.note ?? u.name);
     return `${disabledPrefix}${unitColor(u)}${text}${RESET}${resourcesText}${dsText}${tagsText}`;
   }
 
   const hp = fmtHp(u);
   const ac = fmtAc(u);
-  let left = `${disabledPrefix}${unitColor(u)}${u.name} ${GRAY}- ${hp} / ${AC_COLOR}${ac}${RESET}`;
+  const displayName = formatUnitLabel(u, u.name);
+  let left = `${disabledPrefix}${unitColor(u)}${displayName} ${GRAY}- ${hp} / ${AC_COLOR}${ac}${RESET}`;
   return left + resourcesText + dsText + tagsText;
 }
 
@@ -240,9 +283,18 @@ function renderTurnLine(state: EncounterState): string {
           const label = m?.alias?.trim?.() || m?.name || t.markerId;
           return `${DISABLED_COLOR}[${label}]${color(38)}`;
         }
+        if (t.kind === 'group') {
+          if (!groupHasMembers(state, t.groupId)) return '';
+          return groupLabel(state, t.groupId);
+        }
         const u = state.units.find((x) => x.id === t.unitId);
+        if (!u) return '';
         if ((u as any)?.bench) return '';
-        const label = u?.alias?.trim?.() || u?.name || t.unitId;
+        if (normalizeUnitType(u) !== 'NORMAL') return '';
+        const label = formatUnitLabel(
+          u,
+          u?.alias?.trim?.() || u?.name || t.unitId,
+        );
         if (u?.turnDisabled) return `${DISABLED_COLOR}${label}${color(38)}`;
         return label;
       })
@@ -254,7 +306,7 @@ function renderTurnLine(state: EncounterState): string {
     ? state.tempTurnStack[state.tempTurnStack.length - 1]
     : null;
 
-  // 임시 턴이면 그 유닛을 기준으로, 없으면 turnIndex 기준
+  // ????? ????????????????????????????, ????????turnIndex ?????
   let activeIndex = state.turnIndex;
 
   if (tempId) {
@@ -266,26 +318,36 @@ function renderTurnLine(state: EncounterState): string {
 
   const parts = state.turnOrder
     .map((t, i) => {
-    const isActive = i === activeIndex;
-    const highlight = (text: string) => `${color(36)}${text}${color(38)}`;
+      const isActive = i === activeIndex;
+      const highlight = (text: string) => `${color(36)}${text}${color(38)}`;
 
-    if (t.kind === 'label') return t.text;
-    if (t.kind === 'marker') {
-      const m = state.markers?.find((x) => x.id === t.markerId);
-      const duration = Number(m?.duration ?? 0);
-      const hasDuration = m ? Number.isFinite(duration) && duration > 0 : true;
-      if (!hasDuration) return '';
-      const label = m?.alias?.trim?.() || m?.name || t.markerId;
-      return `${DISABLED_COLOR}[${label}]${color(38)}`;
-    }
-    const u = state.units.find((x) => x.id === t.unitId);
-    if ((u as any)?.bench) return '';
-    const label = u?.alias?.trim?.() || u?.name || t.unitId;
-    const name = `${label}`;
-    if (u?.turnDisabled) return `${DISABLED_COLOR}${name}${color(38)}`;
-    return isActive ? highlight(name) : name;
-  })
-  .filter(Boolean);
+      if (t.kind === 'label') return t.text;
+      if (t.kind === 'marker') {
+        const m = state.markers?.find((x) => x.id === t.markerId);
+        const duration = Number(m?.duration ?? 0);
+        const hasDuration = m ? Number.isFinite(duration) && duration > 0 : true;
+        if (!hasDuration) return '';
+        const label = m?.alias?.trim?.() || m?.name || t.markerId;
+        return `${DISABLED_COLOR}[${label}]${color(38)}`;
+      }
+      if (t.kind === 'group') {
+        if (!groupHasMembers(state, t.groupId)) return '';
+        const label = groupLabel(state, t.groupId);
+        return isActive ? highlight(label) : label;
+      }
+      const u = state.units.find((x) => x.id === t.unitId);
+      if (!u) return '';
+      if ((u as any)?.bench) return '';
+      if (normalizeUnitType(u) !== 'NORMAL') return '';
+      const label = formatUnitLabel(
+        u,
+        u?.alias?.trim?.() || u?.name || t.unitId,
+      );
+      if (u?.turnDisabled) return `${DISABLED_COLOR}${label}${color(38)}`;
+      return isActive ? highlight(label) : label;
+    })
+    .filter(Boolean);
 
   return parts.join(' - ');
 }
+

@@ -9,6 +9,7 @@ import { ItemsModule } from './items/items.module';
 import { DiceModule } from './dice/dice.module';
 import { EncounterModule } from './encounter/encounter.module';
 import { AuthModule } from './auth/auth.module';
+import { UnitPresetsModule } from './unit-presets/unit-presets.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { AuthModule } from './auth/auth.module';
     DiceModule,
     AuthModule,
     EncounterModule,
+    UnitPresetsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

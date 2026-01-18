@@ -55,6 +55,8 @@ model User {
   createdAt    DateTime      @default(now())
   sessions     UserSession[]
   encounters   Encounter[]
+  unitPresetFolders UnitPresetFolder[]
+  unitPresets        UnitPreset[]
 }
 
 model UserSession {
@@ -85,4 +87,37 @@ model EncounterUndo {
   encounter   Encounter @relation(fields: [encounterId], references: [id], onDelete: Cascade)
 
   @@index([encounterId, createdAt])
+}
+
+model UnitPresetFolder {
+  id        String   @id @default(cuid())
+  ownerId   String
+  name      String
+  order     Int      @default(0)
+  parentId  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  owner     User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  parent    UnitPresetFolder? @relation("UnitPresetFolderTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children  UnitPresetFolder[] @relation("UnitPresetFolderTree")
+  presets   UnitPreset[]
+
+  @@index([ownerId])
+  @@index([parentId])
+}
+
+model UnitPreset {
+  id        String   @id @default(cuid())
+  ownerId   String
+  folderId  String?
+  name      String
+  order     Int      @default(0)
+  data      Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  owner     User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  folder    UnitPresetFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
+
+  @@index([ownerId])
+  @@index([folderId])
 }

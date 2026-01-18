@@ -61,6 +61,7 @@ export function buildFormationLines(
   // z 오름차순으로 라인 생성
   const zs = Array.from(byZ.keys()).sort((a, b) => a - b);
   const lines: string[] = [];
+  const showFloor = zs.length > 1;
 
   for (const z of zs) {
     const row = byZ.get(z)!;
@@ -84,10 +85,14 @@ export function buildFormationLines(
     nodes.sort((a, b) => a.x - b.x);
 
     const line = buildLineFromNodes(nodes);
-    const floorLabel = opts?.formatFloorLabel
-      ? opts.formatFloorLabel(z)
-      : formatFloorLabel(z);
-    lines.push(`(${floorLabel}): ${line}`);
+    if (showFloor) {
+      const floorLabel = opts?.formatFloorLabel
+        ? opts.formatFloorLabel(z)
+        : formatFloorLabel(z);
+      lines.push(`(${floorLabel}): ${line}`);
+    } else {
+      lines.push(line);
+    }
   }
 
   return lines;

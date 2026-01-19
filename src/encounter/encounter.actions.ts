@@ -1177,6 +1177,8 @@ export function applyActionInPlace(
 
       const aliasRaw = (action.alias ?? '').trim();
       const alias = aliasRaw ? aliasRaw : undefined;
+      const noteRaw = String((action as any).note ?? '').trim();
+      const note = noteRaw ? noteRaw : undefined;
 
       const colorCode = normalizeAnsiColorCode(action.colorCode);
       const requestedId = String((action as any).unitId ?? '').trim();
@@ -1193,6 +1195,7 @@ export function applyActionInPlace(
         ...(unitType === 'SERVANT' ? { masterUnitId } : {}),
         name,
         ...(alias ? { alias } : {}),
+        ...(note ? { note } : {}),
         tags: [],
         mods: [],
         pos: { x, z },

@@ -280,6 +280,7 @@ export type Action =
   bench?: BenchGroup;
       unitType?: UnitType;
       masterUnitId?: string;
+      note?: string;
       hpFormula?: HpFormula;
       x: number;
       z: number;

@@ -8,6 +8,13 @@ export type TurnGroup = {
   unitIds: string[];
 };
 
+export type HpFormula = {
+  expr: string;
+  params?: Record<string, number>;
+  min?: number;
+  max?: number;
+};
+
 export interface Hp {
   cur: number;
   max: number;
@@ -273,6 +280,7 @@ export type Action =
   bench?: BenchGroup;
       unitType?: UnitType;
       masterUnitId?: string;
+      hpFormula?: HpFormula;
       x: number;
       z: number;
       hpMax: number;

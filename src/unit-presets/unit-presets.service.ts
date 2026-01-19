@@ -1,10 +1,12 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, PrismaClient } from '@prisma/client';
+import { DiceService } from '../dice/dice.service';
 import {
   CreateUnitPresetDto,
   CreateUnitPresetFolderDto,
   UpdateUnitPresetDto,
   UpdateUnitPresetFolderDto,
+  ValidateHpFormulaDto,
 } from './unit-presets.dto';
 
 const DEFAULT_FOLDER_NAME = 'Untitled Folder';
@@ -25,9 +27,23 @@ function normalizeOrder(value: unknown): number | undefined {
   return num;
 }
 
+function extractHpFormulaParams(expr: string) {
+  const out = new Set<string>();
+  const regex = /\{([^}]+)\}/g;
+  let match: RegExpExecArray | null = null;
+  while ((match = regex.exec(expr))) {
+    const name = String(match[1] ?? '').trim();
+    if (name) out.add(name);
+  }
+  return Array.from(out);
+}
+
 @Injectable()
 export class UnitPresetsService {
-  constructor(private readonly prisma: PrismaClient) {}
+  constructor(
+    private readonly prisma: PrismaClient,
+    private readonly dice: DiceService,
+  ) {}
 
   async list(userId: string) {
     const [folders, presets] = await this.prisma.$transaction([
@@ -197,5 +213,79 @@ export class UnitPresetsService {
 
     await this.prisma.unitPreset.delete({ where: { id } });
     return { ok: true };
+  }
+
+  async validateHpFormula(body: ValidateHpFormulaDto) {
+    const expr = String(body?.expr ?? '').trim();
+    if (!expr) throw new BadRequestException('HP 공식이 비어 있습니다.');
+
+    const params: Record<string, number> = {};
+    for (const [key, value] of Object.entries(body?.params ?? {})) {
+      const name = String(key ?? '').trim();
+      if (!name) continue;
+      const num = Number(value);
+      if (!Number.isFinite(num)) {
+        throw new BadRequestException(
+          `HP 공식 파라미터 "${name}" 값이 숫자가 아닙니다.`,
+        );
+      }
+      params[name] = num;
+    }
+
+    const required = extractHpFormulaParams(expr);
+    const missing = required.filter((name) => params[name] === undefined);
+    if (missing.length > 0) {
+      throw new BadRequestException(
+        `HP 공식 파라미터가 누락되었습니다: ${missing.join(', ')}`,
+      );
+    }
+
+    const resolved = expr.replace(/\{([^}]+)\}/g, (_raw, keyRaw) => {
+      const key = String(keyRaw ?? '').trim();
+      if (!key) {
+        throw new BadRequestException('HP 공식의 파라미터 이름이 비어 있습니다.');
+      }
+      if (params[key] === undefined) {
+        throw new BadRequestException(
+          `HP 공식 파라미터가 누락되었습니다: ${key}`,
+        );
+      }
+      return String(params[key]);
+    });
+
+    let result: number;
+    try {
+      result = this.dice.rollExpression(resolved).total;
+    } catch (err: any) {
+      throw new BadRequestException(
+        `HP 공식이 유효하지 않습니다: ${err?.message ?? err}`,
+      );
+    }
+    if (!Number.isFinite(result)) {
+      throw new BadRequestException('HP 공식 계산 결과가 숫자가 아닙니다.');
+    }
+
+    const minRaw = body?.min;
+    const maxRaw = body?.max;
+    const min = Number(minRaw);
+    const max = Number(maxRaw);
+    if (minRaw !== undefined && !Number.isFinite(min)) {
+      throw new BadRequestException('HP 공식 최소값이 숫자가 아닙니다.');
+    }
+    if (maxRaw !== undefined && !Number.isFinite(max)) {
+      throw new BadRequestException('HP 공식 최대값이 숫자가 아닙니다.');
+    }
+    if (Number.isFinite(min) && Number.isFinite(max) && min > max) {
+      throw new BadRequestException(
+        'HP 공식 최소값이 최대값보다 클 수 없습니다.',
+      );
+    }
+
+    let value = result;
+    if (Number.isFinite(min)) value = Math.max(value, min);
+    if (Number.isFinite(max)) value = Math.min(value, max);
+
+    value = Math.round(value);
+    return { ok: true, value };
   }
 }

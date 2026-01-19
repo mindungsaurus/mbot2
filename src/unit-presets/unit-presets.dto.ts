@@ -1,6 +1,15 @@
 import type { Unit } from '../encounter/encounter.types';
 
-export type UnitPresetData = Omit<Unit, 'id'>;
+export type HpFormula = {
+  expr: string;
+  params?: Record<string, number>;
+  min?: number;
+  max?: number;
+};
+
+export type UnitPresetData = Omit<Unit, 'id'> & {
+  hpFormula?: HpFormula;
+};
 
 export type CreateUnitPresetFolderDto = {
   name?: string;
@@ -26,4 +35,11 @@ export type UpdateUnitPresetDto = {
   folderId?: string | null;
   order?: number | null;
   data?: UnitPresetData;
+};
+
+export type ValidateHpFormulaDto = {
+  expr?: string;
+  params?: Record<string, number>;
+  min?: number;
+  max?: number;
 };

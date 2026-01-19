@@ -14,6 +14,7 @@ import {
   Side,
   EncounterLogEntry,
   LogKind,
+  HpFormula,
 } from './encounter.types';
 import {
   getComputedIntegrity,
@@ -22,11 +23,13 @@ import {
 } from './encounter.compute';
 import { getPreset } from './encounter.presets';
 import { randomUUID } from 'crypto';
+import { DiceService } from '../dice/dice.service';
 
 const MAX_STACKS_GLOBAL = 999;
 const MAX_TAG_STACKS = 999;
 const MAX_ABS_POS = 10000;
 const MAX_LOGS = 500;
+const diceService = new DiceService();
 
 type TurnTagDecayChange = {
   tag: string;
@@ -39,6 +42,46 @@ function normPos(v: any): number {
   const n = Math.floor(Number(v));
   if (!Number.isFinite(n)) return 0;
   return Math.max(-MAX_ABS_POS, Math.min(MAX_ABS_POS, n));
+}
+
+function evalHpFormula(formula?: HpFormula): number | null {
+  if (!formula || typeof formula !== 'object') return null;
+  const exprRaw = String(formula.expr ?? '').trim();
+  if (!exprRaw) return null;
+
+  const params: Record<string, number> = {};
+  for (const [key, val] of Object.entries(formula.params ?? {})) {
+    const name = String(key ?? '').trim();
+    if (!name) continue;
+    const num = Number(val);
+    if (!Number.isFinite(num)) {
+      throw new Error(`hpFormula param is not a number: ${name}`);
+    }
+    params[name] = num;
+  }
+
+  const resolved = exprRaw.replace(/\{([^}]+)\}/g, (_raw, keyRaw) => {
+    const key = String(keyRaw ?? '').trim();
+    if (!key) throw new Error('hpFormula has empty parameter name.');
+    if (!(key in params)) {
+      throw new Error(`hpFormula missing parameter: ${key}`);
+    }
+    return String(params[key]);
+  });
+
+  const result = diceService.rollExpression(resolved).total;
+  if (!Number.isFinite(result)) {
+    throw new Error('hpFormula result is not a number.');
+  }
+
+  let value = result;
+  const min = Number(formula.min);
+  const max = Number(formula.max);
+  if (Number.isFinite(min)) value = Math.max(value, min);
+  if (Number.isFinite(max)) value = Math.min(value, max);
+
+  value = Math.round(value);
+  return Math.max(0, value);
 }
 
 // Normalize marker footprint cells to clamped, unique positions.
@@ -1125,7 +1168,11 @@ export function applyActionInPlace(
       const x = normPos(action.x);
       const z = normPos(action.z);
 
-      const hpMax = Math.max(0, Math.floor(Number(action.hpMax ?? 0)));
+      let hpMax = Math.max(0, Math.floor(Number(action.hpMax ?? 0)));
+      const hpFormulaValue = evalHpFormula((action as any).hpFormula);
+      if (typeof hpFormulaValue === 'number') {
+        hpMax = hpFormulaValue;
+      }
       const acBase = Math.floor(Number(action.acBase ?? 0));
 
       const aliasRaw = (action.alias ?? '').trim();

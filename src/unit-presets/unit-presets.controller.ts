@@ -17,6 +17,7 @@ import type {
   CreateUnitPresetFolderDto,
   UpdateUnitPresetDto,
   UpdateUnitPresetFolderDto,
+  ValidateHpFormulaDto,
 } from './unit-presets.dto';
 
 @UseGuards(AuthGuard)
@@ -57,6 +58,11 @@ export class UnitPresetsController {
     @Body() body: CreateUnitPresetDto,
   ) {
     return this.presets.createPreset(req.user.id, body ?? {});
+  }
+
+  @Post('validate-hp-formula')
+  async validateHpFormula(@Body() body: ValidateHpFormulaDto) {
+    return this.presets.validateHpFormula(body ?? {});
   }
 
   @Patch(':id')

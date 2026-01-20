@@ -153,6 +153,29 @@ export function applyActionInPlace(
       pushLog(state, 'ACTION', msg, action, makeLogCtx(state));
       return;
     }
+    case 'SET_SIDE_NOTES': {
+      const incoming = (action as any).notes ?? {};
+      const prev = { ...(state as any).sideNotes } as Partial<
+        Record<'TEAM' | 'ENEMY' | 'NEUTRAL', string>
+      >;
+      const sides: Array<'TEAM' | 'ENEMY' | 'NEUTRAL'> = [
+        'TEAM',
+        'ENEMY',
+        'NEUTRAL',
+      ];
+
+      for (const side of sides) {
+        if (!(side in incoming)) continue;
+        const raw = incoming[side];
+        const note = typeof raw === 'string' ? raw.trim() : '';
+        if (note) prev[side] = note;
+        else delete prev[side];
+      }
+
+      if (Object.keys(prev).length > 0) (state as any).sideNotes = prev;
+      else delete (state as any).sideNotes;
+      return;
+    }
     case 'APPLY_DAMAGE': {
       const ctx = makeLogCtx(state);
       const u = findUnit(state, action.unitId);

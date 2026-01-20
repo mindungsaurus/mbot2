@@ -109,6 +109,7 @@ export interface EncounterState {
   id: string;
   units: Unit[];
   markers?: Marker[];
+  sideNotes?: Partial<Record<Side, string>>;
   turnOrder: TurnEntry[];
   turnGroups?: TurnGroup[];
   turnIndex: number;
@@ -220,6 +221,7 @@ export interface UnitPatch {
 
 export type Action =
   | { type: 'BATTLE_START' }
+  | { type: 'SET_SIDE_NOTES'; notes: Partial<Record<Side, string | null>> }
   | { type: 'APPLY_DAMAGE'; unitId: string; amount: number }
   | { type: 'HEAL'; unitId: string; amount: number }
   | {

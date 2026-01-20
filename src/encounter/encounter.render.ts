@@ -192,6 +192,7 @@ export function renderAnsi(state: EncounterState, opts?: RenderOptions): string 
   const benchEnemy = hideBenchEnemy
     ? []
     : (state.units ?? []).filter((u) => (u as any).bench === 'ENEMY');
+  const sideNotes = (state as any).sideNotes ?? {};
 
   const lines: string[] = [];
 
@@ -199,7 +200,13 @@ export function renderAnsi(state: EncounterState, opts?: RenderOptions): string 
     lines.push(`${color(31)}<전투 개시되지 않음>${RESET}`);
   }
 
+  const teamNote = typeof sideNotes.TEAM === 'string' ? sideNotes.TEAM.trim() : '';
+  const enemyNote = typeof sideNotes.ENEMY === 'string' ? sideNotes.ENEMY.trim() : '';
+  const neutralNote =
+    typeof sideNotes.NEUTRAL === 'string' ? sideNotes.NEUTRAL.trim() : '';
+
   lines.push(`${color(34)}Team${RESET}`);
+  if (teamNote) lines.push(teamNote);
   for (const u of team) lines.push(renderUnitLine(u));
   if (benchTeam.length) {
     lines.push(`${DISABLED_COLOR}===============${RESET}`);
@@ -208,6 +215,7 @@ export function renderAnsi(state: EncounterState, opts?: RenderOptions): string 
   lines.push('');
 
   lines.push(`${color(31)}Enemy${RESET}`);
+  if (enemyNote) lines.push(enemyNote);
   for (const u of enemy) lines.push(renderUnitLine(u));
   if (benchEnemy.length) {
     lines.push(`${DISABLED_COLOR}===============${RESET}`);
@@ -217,6 +225,7 @@ export function renderAnsi(state: EncounterState, opts?: RenderOptions): string 
 
   if (neutral.length) {
     lines.push(`${color(90)}Neutral${RESET}`);
+    if (neutralNote) lines.push(neutralNote);
     for (const u of neutral) lines.push(renderUnitLine(u));
     lines.push('');
   }

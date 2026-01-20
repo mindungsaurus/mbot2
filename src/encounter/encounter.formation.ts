@@ -8,6 +8,119 @@ type Node = {
   label: string;
 };
 
+type UnitEntry = {
+  unit: Unit;
+  label: string;
+};
+
+const IDENTIFIER_SYMBOLS = [
+  'ㄱ',
+  'ㄴ',
+  'ㄷ',
+  'ㄹ',
+  'ㅁ',
+  'ㅂ',
+  'ㅅ',
+  'ㅇ',
+  'ㅈ',
+  'ㅊ',
+  'ㅋ',
+  'ㅌ',
+  'ㅍ',
+  'ㅎ',
+  ...'abcdefghijklmnopqrstuvwxyz'.split(''),
+  ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split(''),
+  'α',
+  'β',
+  'γ',
+  'δ',
+  'ε',
+  'ζ',
+  'η',
+  'θ',
+  'ι',
+  'κ',
+  'λ',
+  'μ',
+  'ν',
+  'ξ',
+  'ο',
+  'π',
+  'ρ',
+  'σ',
+  'τ',
+  'υ',
+  'φ',
+  'χ',
+  'ψ',
+  'ω',
+  ...Array.from({ length: 20 }, (_, i) => String(i + 1)),
+].sort((a, b) => b.length - a.length);
+
+function splitIdentifierLabel(label: string): { base: string; suffix: string | null } {
+  const raw = (label ?? '').trim();
+  if (!raw) return { base: raw, suffix: null };
+
+  for (const symbol of IDENTIFIER_SYMBOLS) {
+    const bracket = `[${symbol}]`;
+    if (raw.endsWith(bracket)) {
+      return { base: raw.slice(0, -bracket.length), suffix: symbol };
+    }
+  }
+  for (const symbol of IDENTIFIER_SYMBOLS) {
+    if (raw.endsWith(symbol)) {
+      return { base: raw.slice(0, -symbol.length), suffix: symbol };
+    }
+  }
+  return { base: raw, suffix: null };
+}
+
+function collapseUnitLabels(
+  entries: UnitEntry[],
+  format?: (unit: Unit, label: string) => string,
+): string[] {
+  const grouped: Array<{
+    unit: Unit;
+    base: string;
+    label: string;
+    suffixes: string[] | null;
+  }> = [];
+  const groupIndex = new Map<string, number>();
+
+  for (const entry of entries) {
+    const { base, suffix } = splitIdentifierLabel(entry.label);
+    if (suffix && base) {
+      const key = base;
+      const idx = groupIndex.get(key);
+      if (idx !== undefined) {
+        grouped[idx].suffixes?.push(suffix);
+      } else {
+        grouped.push({
+          unit: entry.unit,
+          base,
+          label: entry.label,
+          suffixes: [suffix],
+        });
+        groupIndex.set(key, grouped.length - 1);
+      }
+      continue;
+    }
+    grouped.push({
+      unit: entry.unit,
+      base: entry.label,
+      label: entry.label,
+      suffixes: null,
+    });
+  }
+
+  return grouped.map((group) => {
+    const text = group.suffixes
+      ? `${group.base}${group.suffixes.join('')}`
+      : group.label;
+    return format ? format(group.unit, text) : text;
+  });
+}
+
 export function buildFormationLines(
   state: EncounterState,
   opts?: {
@@ -16,10 +129,15 @@ export function buildFormationLines(
     formatFloorLabel?: (z: number) => string;
   },
 ): string[] {
-  const byZ = new Map<number, Map<number, { markers: string[]; units: string[] }>>();
+  const byZ = new Map<
+    number,
+    Map<number, { markers: string[]; units: UnitEntry[] }>
+  >();
 
   function getCell(z: number, x: number) {
-    const row = byZ.get(z) ?? new Map<number, { markers: string[]; units: string[] }>();
+    const row =
+      byZ.get(z) ??
+      new Map<number, { markers: string[]; units: UnitEntry[] }>();
     if (!byZ.has(z)) byZ.set(z, row);
     const cell = row.get(x) ?? { markers: [], units: [] };
     if (!row.has(x)) row.set(x, cell);
@@ -32,10 +150,7 @@ export function buildFormationLines(
     if ((u as any).bench) continue;
     if (!u.pos) continue;
     const baseLabel = (u.alias ?? '').trim() || u.name;
-    const label = opts?.formatUnitLabel
-      ? opts.formatUnitLabel(u, baseLabel)
-      : baseLabel;
-    getCell(u.pos.z, u.pos.x).units.push(label);
+    getCell(u.pos.z, u.pos.x).units.push({ unit: u, label: baseLabel });
   }
 
   // 마커 수집
@@ -69,7 +184,10 @@ export function buildFormationLines(
 
     for (const [x, cell] of row.entries()) {
       const markers = cell.markers.filter(Boolean);
-      const units = cell.units.filter(Boolean);
+      const units = collapseUnitLabels(
+        cell.units,
+        opts?.formatUnitLabel,
+      ).filter(Boolean);
       // Markers first (bracketed), then units.
       let label = '';
       if (markers.length) {

@@ -30,6 +30,105 @@ const MAX_TAG_STACKS = 999;
 const MAX_ABS_POS = 10000;
 const MAX_LOGS = 500;
 const diceService = new DiceService();
+type IdentifierScheme = {
+  id: string;
+  label: string;
+  symbols: string[];
+};
+
+const IDENTIFIER_SCHEMES: IdentifierScheme[] = [
+  {
+    id: 'korean',
+    label: 'Korean',
+    symbols: ['ㄱ', 'ㄴ', 'ㄷ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅅ', 'ㅇ', 'ㅈ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ'],
+  },
+  {
+    id: 'abc',
+    label: 'abc',
+    symbols: 'abcdefghijklmnopqrstuvwxyz'.split(''),
+  },
+  {
+    id: 'ABC',
+    label: 'ABC',
+    symbols: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split(''),
+  },
+  {
+    id: 'greek',
+    label: 'Greek',
+    symbols: [
+      'α',
+      'β',
+      'γ',
+      'δ',
+      'ε',
+      'ζ',
+      'η',
+      'θ',
+      'ι',
+      'κ',
+      'λ',
+      'μ',
+      'ν',
+      'ξ',
+      'ο',
+      'π',
+      'ρ',
+      'σ',
+      'τ',
+      'υ',
+      'φ',
+      'χ',
+      'ψ',
+      'ω',
+    ],
+  },
+  {
+    id: 'number',
+    label: '123',
+    symbols: Array.from({ length: 20 }, (_, i) => String(i + 1)),
+  },
+];
+
+function getIdentifierScheme(id: string): IdentifierScheme | null {
+  const key = String(id ?? '').trim();
+  if (!key) return null;
+  return IDENTIFIER_SCHEMES.find((scheme) => scheme.id === key) ?? null;
+}
+
+function makeIdentifierKey(schemeId: string, baseName: string): string {
+  return `${schemeId}:${baseName}`;
+}
+
+function stripIdentifierSuffix(name: string, scheme: IdentifierScheme): string {
+  const raw = String(name ?? '');
+  if (!raw) return raw;
+  for (const symbol of scheme.symbols) {
+    const bracket = `[${symbol}]`;
+    if (raw.endsWith(bracket)) return raw.slice(0, -bracket.length);
+  }
+  for (const symbol of scheme.symbols) {
+    if (raw.endsWith(symbol)) return raw.slice(0, -symbol.length);
+  }
+  return raw;
+}
+
+function endsWithSchemeSymbol(name: string, scheme: IdentifierScheme): boolean {
+  const raw = String(name ?? '');
+  if (!raw) return false;
+  return scheme.symbols.some(
+    (symbol) => raw.endsWith(symbol) || raw.endsWith(`[${symbol}]`),
+  );
+}
+
+function appendIdentifier(
+  name: string,
+  scheme: IdentifierScheme,
+  symbol: string,
+): string {
+  if (!name) return name;
+  const suffix = endsWithSchemeSymbol(name, scheme) ? `[${symbol}]` : symbol;
+  return `${name}${suffix}`;
+}
 
 type TurnTagDecayChange = {
   tag: string;
@@ -1334,6 +1433,54 @@ export function applyActionInPlace(
         action,
         ctx,
       );
+      return;
+    }
+
+    case 'ASSIGN_IDENTIFIER': {
+      const ctx = makeLogCtx(state);
+      const schemeId = String((action as any).scheme ?? '').trim();
+      const scheme = getIdentifierScheme(schemeId);
+      if (!scheme || scheme.symbols.length === 0) return;
+
+      const unitIds = Array.isArray((action as any).unitIds)
+        ? (action as any).unitIds
+            .map((id: any) => String(id ?? '').trim())
+            .filter(Boolean)
+        : [];
+      if (unitIds.length === 0) return;
+
+      state.identifierCounters ??= {};
+      const counters = state.identifierCounters;
+      const changes: string[] = [];
+
+      for (const unitId of unitIds) {
+        const u = state.units.find((x) => x.id === unitId);
+        if (!u) continue;
+        normalizeUnit(u);
+
+        const baseRaw = stripIdentifierSuffix(u.name, scheme).trim();
+        const baseName = baseRaw || u.name.trim() || u.id;
+        const key = makeIdentifierKey(scheme.id, baseName);
+        const cur = Math.max(0, Math.floor(Number(counters[key] ?? 0)));
+        const symbol = scheme.symbols[cur % scheme.symbols.length];
+        counters[key] = cur + 1;
+
+        const before = u.name;
+        u.name = appendIdentifier(u.name, scheme, symbol);
+        if (u.alias) u.alias = appendIdentifier(u.alias, scheme, symbol);
+
+        if (before !== u.name) changes.push(`${before}->${u.name}`);
+      }
+
+      if (changes.length) {
+        pushLog(
+          state,
+          'ACTION',
+          `Identifier assigned: ${changes.join(', ')}.`,
+          action,
+          ctx,
+        );
+      }
       return;
     }
 

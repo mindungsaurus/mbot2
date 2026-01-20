@@ -114,6 +114,7 @@ export interface EncounterState {
   turnGroups?: TurnGroup[];
   turnIndex: number;
   battleStarted?: boolean;
+  identifierCounters?: Record<string, number>;
 
   /** @deprecated (구버전 호환용) */
   formationLines?: string[];
@@ -292,6 +293,11 @@ export type Action =
       turnOrderIndex: number; // turnOrder 삽입 위치(0-based)
     }
   | { type: 'REMOVE_UNIT'; unitId: string }
+  | {
+      type: 'ASSIGN_IDENTIFIER';
+      unitIds: string[];
+      scheme: string;
+    }
   | { type: 'GRANT_TEMP_TURN'; unitId: string }
   | { type: 'MOVE_TURN_ENTRY'; fromIndex: number; toIndex: number }
   | {

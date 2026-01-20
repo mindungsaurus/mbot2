@@ -386,6 +386,64 @@ export class ItemsService {
     }
   }
 
+  public async ListInventory(owner: string) {
+    const name = (owner ?? '').trim();
+    if (!name) return [];
+    return this.prisma.inventory.findMany({
+      where: { owner: name },
+      orderBy: { itemName: 'asc' },
+    });
+  }
+
+  public async ListItemCatalog() {
+    return this.prisma.itemsInfo.findMany({
+      orderBy: { name: 'asc' },
+    });
+  }
+
+  public async RemoveItemInventory(
+    owner: string,
+    itemName: string,
+    amount: number,
+  ) {
+    const name = (owner ?? '').trim();
+    const item = (itemName ?? '').trim();
+    const qty = Math.trunc(Number(amount));
+
+    if (!name) throw new BadRequestException('owner required');
+    if (!item) throw new BadRequestException('item name required');
+    if (!Number.isFinite(qty) || qty <= 0) {
+      throw new BadRequestException('amount must be positive');
+    }
+
+    const res = await this.prisma.inventory.updateMany({
+      where: { owner: name, itemName: item, amount: { gte: qty } },
+      data: { amount: { decrement: qty } },
+    });
+    if (res.count === 0) {
+      const exists = await this.prisma.inventory.findUnique({
+        where: { owner_itemName: { owner: name, itemName: item } },
+        select: { amount: true },
+      });
+      if (!exists) {
+        throw new NotFoundException('inventory item not found');
+      }
+      throw new BadRequestException('insufficient item amount');
+    }
+
+    const after = await this.prisma.inventory.findUnique({
+      where: { owner_itemName: { owner: name, itemName: item } },
+      select: { amount: true },
+    });
+    if (after && after.amount === 0) {
+      await this.prisma.inventory.delete({
+        where: { owner_itemName: { owner: name, itemName: item } },
+      });
+    }
+
+    return { owner: name, itemName: item };
+  }
+
   public async AddItemInfo(payload: ItemsTransactionsInfoDTO) {
     try {
       await this.prisma.itemsInfo.create({

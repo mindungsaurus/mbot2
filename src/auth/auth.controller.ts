@@ -8,6 +8,10 @@ type AuthBody = {
   password?: string;
 };
 
+type AdminKeyBody = {
+  key?: string;
+};
+
 @Controller('auth')
 export class AuthController {
   constructor(private readonly auth: AuthService) {}
@@ -33,5 +37,11 @@ export class AuthController {
   async logout(@Req() req: AuthRequest) {
     await this.auth.logout(req.token);
     return { ok: true };
+  }
+
+  @Post('claim-admin')
+  @UseGuards(AuthGuard)
+  async claimAdmin(@Req() req: AuthRequest, @Body() body: AdminKeyBody) {
+    return this.auth.claimAdmin(req.user.id, body?.key ?? '');
   }
 }

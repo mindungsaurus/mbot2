@@ -9,6 +9,7 @@ import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'crypto';
 type PublicUser = {
   id: string;
   username: string;
+  isAdmin: boolean;
 };
 
 @Injectable()
@@ -49,7 +50,7 @@ export class AuthService {
       data: { username, passwordHash, passwordSalt: salt },
     });
 
-    return { id: user.id, username: user.username };
+    return { id: user.id, username: user.username, isAdmin: user.isAdmin };
   }
 
   async login(usernameRaw: string, passwordRaw: string): Promise<{
@@ -90,7 +91,10 @@ export class AuthService {
       },
     });
 
-    return { token, user: { id: user.id, username: user.username } };
+    return {
+      token,
+      user: { id: user.id, username: user.username, isAdmin: user.isAdmin },
+    };
   }
 
   async getUserByToken(token: string): Promise<PublicUser | null> {
@@ -110,7 +114,34 @@ export class AuthService {
       data: { lastSeenAt: new Date() },
     });
 
-    return { id: session.user.id, username: session.user.username };
+    return {
+      id: session.user.id,
+      username: session.user.username,
+      isAdmin: session.user.isAdmin,
+    };
+  }
+
+  async claimAdmin(userId: string, keyRaw: string): Promise<PublicUser> {
+    const adminKey = (process.env.ADMIN_KEY ?? '').trim();
+    if (!adminKey) {
+      throw new BadRequestException('ADMIN_KEY not set');
+    }
+
+    const key = (keyRaw ?? '').trim();
+    if (!key) {
+      throw new BadRequestException('admin key required');
+    }
+
+    if (key !== adminKey) {
+      throw new UnauthorizedException('invalid admin key');
+    }
+
+    const user = await this.prisma.user.update({
+      where: { id: userId },
+      data: { isAdmin: true },
+    });
+
+    return { id: user.id, username: user.username, isAdmin: user.isAdmin };
   }
 
   async logout(token: string): Promise<void> {

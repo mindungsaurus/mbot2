@@ -52,6 +52,7 @@ model User {
   username     String        @unique
   passwordHash String
   passwordSalt String
+  isAdmin      Boolean       @default(false)
   createdAt    DateTime      @default(now())
   sessions     UserSession[]
   encounters   Encounter[]

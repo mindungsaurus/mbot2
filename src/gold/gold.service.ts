@@ -77,7 +77,10 @@ export class GoldService {
           gold: 0,
           dailyExpense: 0,
           isNpc: characterInfoDTO.isNpc,
-          friend: characterInfoDTO.isNpc ? friendName : null,
+          friend:
+            characterInfoDTO.isNpc && friendName.length > 0
+              ? friendName
+              : null,
         },
       });
     } catch (err: any) {

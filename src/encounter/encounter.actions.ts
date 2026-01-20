@@ -1288,6 +1288,7 @@ export function applyActionInPlace(
         if (t?.kind === 'label') return true;
         if (t?.kind === 'marker') return true;
         if (t?.kind === 'unit') return !removeIds.has(t.unitId);
+        if (t?.kind === 'group') return true;
         return false;
       });
 
@@ -1557,6 +1558,7 @@ export function applyActionInPlace(
           if (t?.kind === 'label') return true;
           if (t?.kind === 'marker') return true;
           if (t?.kind === 'unit') return t.unitId !== id;
+          if (t?.kind === 'group') return true;
           return false;
         });
 

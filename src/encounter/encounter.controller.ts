@@ -61,7 +61,7 @@ export class EncounterController {
   // (?µì…˜) ?„ë¡ ?¸ì—??"?´ê? ë³´ë‚´?¤ëŠ” ANSI" ë¯¸ë¦¬ë³´ê¸° ??  @Get(':id/render')
   async render(@Req() req: AuthRequest, @Param('id') id: string) {
     const state = await this.encounter.get(req.user.id, id);
-    return { ansi: this.encounter.render(state) };
+    return { ansi: await this.encounter.renderForUser(req.user.id, state) };
   }
 
   @Post(':id/publish')
@@ -79,7 +79,7 @@ export class EncounterController {
     const hideBench = !!body?.hideBench;
     const hideBenchTeam = hideBench || !!body?.hideBenchTeam;
     const hideBenchEnemy = hideBench || !!body?.hideBenchEnemy;
-    const ansi = this.encounter.render(state, {
+    const ansi = await this.encounter.renderForUser(req.user.id, state, {
       hideBench,
       hideBenchTeam,
       hideBenchEnemy,
@@ -103,3 +103,4 @@ function sanitizeChannelId(input?: string): string {
   const digits = s.replace(/\D/g, '');
   return digits;
 }
+

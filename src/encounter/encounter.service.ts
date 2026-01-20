@@ -175,8 +175,34 @@ export class EncounterService {
   render(
     idState: EncounterState,
     opts?: { hideBench?: boolean; hideBenchTeam?: boolean; hideBenchEnemy?: boolean },
+    tagColors?: Record<string, number>,
   ): string {
-    return renderAnsi(idState, opts);
+    return renderAnsi(idState, opts, tagColors);
+  }
+
+  async renderForUser(
+    userId: string,
+    idState: EncounterState,
+    opts?: { hideBench?: boolean; hideBenchTeam?: boolean; hideBenchEnemy?: boolean },
+  ): Promise<string> {
+    const tagColors = await this.getTagPresetColorMap(userId);
+    return renderAnsi(idState, opts, tagColors);
+  }
+
+  private async getTagPresetColorMap(userId: string) {
+    const presets = await this.prisma.tagPreset.findMany({
+      where: { ownerId: userId },
+      select: { name: true, colorCode: true },
+    });
+
+    const map: Record<string, number> = {};
+    for (const preset of presets) {
+      const key = String(preset.name ?? '').trim();
+      if (!key) continue;
+      if (typeof preset.colorCode !== 'number') continue;
+      map[key] = preset.colorCode;
+    }
+    return map;
   }
 
   async setDefaultPublishChannel(userId: string, id: string, channelId: string) {

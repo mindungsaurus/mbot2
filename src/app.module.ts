@@ -10,6 +10,7 @@ import { DiceModule } from './dice/dice.module';
 import { EncounterModule } from './encounter/encounter.module';
 import { AuthModule } from './auth/auth.module';
 import { UnitPresetsModule } from './unit-presets/unit-presets.module';
+import { TagPresetsModule } from './tag-presets/tag-presets.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { UnitPresetsModule } from './unit-presets/unit-presets.module';
     AuthModule,
     EncounterModule,
     UnitPresetsModule,
+    TagPresetsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

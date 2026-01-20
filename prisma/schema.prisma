@@ -57,6 +57,8 @@ model User {
   encounters   Encounter[]
   unitPresetFolders UnitPresetFolder[]
   unitPresets        UnitPreset[]
+  tagPresetFolders  TagPresetFolder[]
+  tagPresets         TagPreset[]
 }
 
 model UserSession {
@@ -120,4 +122,40 @@ model UnitPreset {
 
   @@index([ownerId])
   @@index([folderId])
+}
+
+model TagPreset {
+  id             String   @id @default(cuid())
+  ownerId        String
+  folderId       String?
+  name           String
+  order          Int      @default(0)
+  kind           String
+  decOnTurnStart Boolean  @default(false)
+  decOnTurnEnd   Boolean  @default(false)
+  colorCode      Int?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  owner          User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  folder         TagPresetFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
+
+  @@index([ownerId])
+  @@index([folderId])
+}
+
+model TagPresetFolder {
+  id        String   @id @default(cuid())
+  ownerId   String
+  name      String
+  order     Int      @default(0)
+  parentId  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  owner     User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  parent    TagPresetFolder? @relation("TagPresetFolderTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children  TagPresetFolder[] @relation("TagPresetFolderTree")
+  presets   TagPreset[]
+
+  @@index([ownerId])
+  @@index([parentId])
 }

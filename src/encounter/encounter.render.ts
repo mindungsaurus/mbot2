@@ -16,6 +16,10 @@ function color(code: number) {
   return `\x1b[1;${code}m`;
 }
 
+function colorPlain(code: number) {
+  return `\x1b[0;${code}m`;
+}
+
 const DEATH_SUCCESS_COLOR = color(36); // cyan
 const DEATH_FAILURE_COLOR = color(31); // red
 const SLOT_COLOR = color(34); // blue
@@ -84,7 +88,7 @@ function groupHasMembers(state: EncounterState, groupId: string): boolean {
   return false;
 }
 
-function fmtTags(u: Unit) {
+function fmtTags(u: Unit, tagColors?: Record<string, number>) {
   const base = getDisplayTags(u);
 
   const seen = new Set<string>();
@@ -97,7 +101,32 @@ function fmtTags(u: Unit) {
   }
 
   if (!all.length) return '';
-  return ' ' + all.map((t) => `(${t})`).join(' ');
+
+  const resolveColor = (tag: string) => {
+    if (!tagColors) return undefined;
+    const trimmed = tag.trim();
+    if (trimmed && tagColors[trimmed] !== undefined) {
+      return tagColors[trimmed];
+    }
+    const baseName = trimmed.replace(/\s+x\d+$/i, '').trim();
+    if (baseName && tagColors[baseName] !== undefined) {
+      return tagColors[baseName];
+    }
+    return undefined;
+  };
+
+  return (
+    ' ' +
+    all
+      .map((t) => {
+        const code = resolveColor(t);
+        if (typeof code === 'number') {
+          return `(${colorPlain(code)}${t}${RESET})`;
+        }
+        return `(${t})`;
+      })
+      .join(' ')
+  );
 }
 
 function fmtSpellSlots(u: Unit): string {
@@ -177,7 +206,11 @@ function fmtAc(u: Unit) {
   return `AC.${base}(${ds})`;
 }
 
-export function renderAnsi(state: EncounterState, opts?: RenderOptions): string {
+export function renderAnsi(
+  state: EncounterState,
+  opts?: RenderOptions,
+  tagColors?: Record<string, number>,
+): string {
   const hideBench = !!opts?.hideBench;
   const hideBenchTeam = hideBench || !!opts?.hideBenchTeam;
   const hideBenchEnemy = hideBench || !!opts?.hideBenchEnemy;
@@ -207,26 +240,26 @@ export function renderAnsi(state: EncounterState, opts?: RenderOptions): string 
 
   lines.push(`${color(34)}Team${RESET}`);
   if (teamNote) lines.push(teamNote);
-  for (const u of team) lines.push(renderUnitLine(u));
+  for (const u of team) lines.push(renderUnitLine(u, tagColors));
   if (benchTeam.length) {
     lines.push(`${DISABLED_COLOR}===============${RESET}`);
-    for (const u of benchTeam) lines.push(renderUnitLine(u));
+    for (const u of benchTeam) lines.push(renderUnitLine(u, tagColors));
   }
   lines.push('');
 
   lines.push(`${color(31)}Enemy${RESET}`);
   if (enemyNote) lines.push(enemyNote);
-  for (const u of enemy) lines.push(renderUnitLine(u));
+  for (const u of enemy) lines.push(renderUnitLine(u, tagColors));
   if (benchEnemy.length) {
     lines.push(`${DISABLED_COLOR}===============${RESET}`);
-    for (const u of benchEnemy) lines.push(renderUnitLine(u));
+    for (const u of benchEnemy) lines.push(renderUnitLine(u, tagColors));
   }
   lines.push('');
 
   if (neutral.length) {
     lines.push(`${color(90)}Neutral${RESET}`);
     if (neutralNote) lines.push(neutralNote);
-    for (const u of neutral) lines.push(renderUnitLine(u));
+    for (const u of neutral) lines.push(renderUnitLine(u, tagColors));
     lines.push('');
   }
 
@@ -256,11 +289,14 @@ export function renderAnsi(state: EncounterState, opts?: RenderOptions): string 
   return lines.join('\n');
 }
 
-function renderUnitLine(u: Unit): string {
+function renderUnitLine(
+  u: Unit,
+  tagColors?: Record<string, number>,
+): string {
   const ds = fmtDeathSaves(u);
   const dsText = ds ? ` ${ds}` : '';
   const resourcesText = fmtResources(u);
-  const tagsText = fmtTags(u);
+  const tagsText = fmtTags(u, tagColors);
   const disabledPrefix = u.turnDisabled
     ? `${DISABLED_COLOR}[\uD134 \uBE44\uD65C\uC131\uD654]${RESET} `
     : '';

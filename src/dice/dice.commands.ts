@@ -23,7 +23,7 @@ export class DiceCommands {
   ) {}
 
   @SlashCommand({
-    name: 'mroll',
+    name: 'r',
     description: 'Roll dice using standard dice notation (e.g., ((2d6+3)*2)',
     guilds: ['1284642997375336592', '1273347630767804539'],
   })

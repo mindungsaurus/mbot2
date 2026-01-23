@@ -15,6 +15,7 @@ import {
   EncounterLogEntry,
   LogKind,
   HpFormula,
+  TurnEndSnapshot,
 } from './encounter.types';
 import {
   getComputedIntegrity,
@@ -332,6 +333,67 @@ export function applyActionInPlace(
         state,
         'ACTION',
         `${unitLabel(state, action.unitId)}에게 ${amount}의 회복.`,
+        action,
+        ctx,
+      );
+      return;
+    }
+
+
+    case 'EDIT_MAX_HP': {
+      const ctx = makeLogCtx(state);
+      const u = findUnit(state, action.unitId);
+      normalizeUnit(u);
+      if (!u.hp) return;
+
+      const beforeMax = u.hp.max;
+      const beforeCur = u.hp.cur;
+      if (typeof beforeMax !== 'number' || !Number.isFinite(beforeMax)) return;
+
+      const delta = Math.trunc(Number(action.delta));
+      if (!Number.isFinite(delta) || delta === 0) return;
+
+      const nextMax = Math.max(0, beforeMax + delta);
+      const applyToCur = !!action.applyToCur;
+
+      let nextCur = beforeCur;
+      if (typeof beforeCur === 'number' && Number.isFinite(beforeCur)) {
+        if (applyToCur) {
+          nextCur = Math.max(0, Math.min(nextMax, beforeCur + delta));
+        } else {
+          nextCur = Math.min(beforeCur, nextMax);
+        }
+      }
+
+      const maxChanged = nextMax !== beforeMax;
+      const curChanged =
+        typeof beforeCur === 'number' &&
+        Number.isFinite(beforeCur) &&
+        typeof nextCur === 'number' &&
+        nextCur !== beforeCur;
+
+      if (!maxChanged && !curChanged) return;
+
+      u.hp.max = nextMax;
+      if (curChanged && typeof nextCur === 'number') {
+        u.hp.cur = nextCur;
+      } else if (
+        typeof u.hp.cur === 'number' &&
+        Number.isFinite(u.hp.cur) &&
+        u.hp.cur > nextMax
+      ) {
+        u.hp.cur = nextMax;
+      }
+
+      const curInfo =
+        typeof beforeCur === 'number' && typeof u.hp.cur === 'number'
+          ? `, ?? HP ${beforeCur}?${u.hp.cur}`
+          : '';
+
+      pushLog(
+        state,
+        'ACTION',
+        `${unitLabel(state, action.unitId)} ?? HP ${beforeMax}?${nextMax}${curInfo}.`,
         action,
         ctx,
       );
@@ -658,6 +720,8 @@ export function applyActionInPlace(
       } else if (activeEntry.kind === 'group') {
         applyGroupTurnDecays(state, activeEntry.groupId, 'end', action, ctxBefore);
       }
+
+      captureTurnEndSnapshot(state, activeEntry);
 
       // 2) 임시 턴이면: pop 후 "재개" (턴오더 진행 X, start 감소 X)
       if (state.tempTurnStack?.length) {
@@ -1382,6 +1446,11 @@ export function applyActionInPlace(
       }
 
       state.units = (state.units ?? []).filter((u) => !removeIds.has(u.id));
+      if (state.turnEndSnapshots) {
+        for (const removeId of removeIds) {
+          delete state.turnEndSnapshots[removeId];
+        }
+      }
 
       const filtered = order.filter((t: any) => {
         if (t?.kind === 'label') return true;
@@ -2468,6 +2537,108 @@ function pushLog(
 
 function unitLabel(state: EncounterState, id: string): string {
   return state.units.find((u) => u.id === id)?.name ?? id;
+}
+
+function formatSpellSlotsSummary(
+  slots?: Record<number, number> | Record<string, number>,
+): string | undefined {
+  if (!slots) return undefined;
+  const levels = Object.keys(slots)
+    .map((k) => Math.trunc(Number(k)))
+    .filter((n) => Number.isFinite(n) && n >= 1 && n <= 9)
+    .sort((a, b) => a - b);
+  if (levels.length === 0) return undefined;
+
+  const max = levels[levels.length - 1];
+  const parts: string[] = [];
+  for (let lvl = 1; lvl <= max; lvl += 1) {
+    const raw = (slots as any)[lvl] ?? (slots as any)[String(lvl)];
+    const n = Math.max(0, Math.trunc(Number(raw ?? 0)));
+    parts.push(String(n));
+  }
+  return `[${parts.join('/')}]`;
+}
+
+function formatConsumablesSummary(
+  consumables?: Record<string, number>,
+): string | undefined {
+  const entries = Object.entries(consumables ?? {}).filter(
+    ([, value]) => typeof value === 'number',
+  );
+  if (entries.length === 0) return undefined;
+  return entries
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([name, value]) => `${name} ${value}`)
+    .join(', ');
+}
+
+function buildTurnEndSnapshot(unit: Unit | null | undefined): TurnEndSnapshot | null {
+  if (!unit) return null;
+  const snap: TurnEndSnapshot = {};
+  const slots = formatSpellSlotsSummary(unit.spellSlots as any);
+  if (slots) snap.spellSlots = slots;
+
+  const consumables = formatConsumablesSummary(unit.consumables);
+  if (consumables) snap.consumables = consumables;
+
+  const tagStates = unit.tagStates ?? {};
+  const stackNames = new Set(Object.keys(tagStates));
+  const toggleTags = (unit.tags ?? [])
+    .map((raw) => String(raw ?? '').trim())
+    .filter((name) => name && !stackNames.has(name))
+    .sort((a, b) => a.localeCompare(b));
+  if (toggleTags.length > 0) {
+    snap.toggleTags = toggleTags.join(', ');
+  }
+
+  const manualStacks = Object.entries(tagStates)
+    .map(([name, st]) => ({
+      name: String(name ?? '').trim(),
+      stacks: Math.max(0, Math.trunc(Number((st as any)?.stacks ?? 0))),
+      decStart: !!(st as any)?.decOnTurnStart,
+      decEnd: !!(st as any)?.decOnTurnEnd,
+    }))
+    .filter(
+      (entry) =>
+        entry.name &&
+        Number.isFinite(entry.stacks) &&
+        !entry.decStart &&
+        !entry.decEnd,
+    )
+    .map((entry) => `${entry.name} x${entry.stacks}`)
+    .sort((a, b) => a.localeCompare(b));
+  if (manualStacks.length > 0) {
+    snap.manualStacks = manualStacks.join(', ');
+  }
+
+  if (Object.keys(snap).length === 0) return null;
+  return snap;
+}
+
+function captureTurnEndSnapshot(state: EncounterState, entry: TurnEntry | null | undefined) {
+  if (!entry) return;
+  state.turnEndSnapshots ??= {};
+
+  const applySnapshot = (unit: Unit | null | undefined) => {
+    if (!unit) return;
+    const snap = buildTurnEndSnapshot(unit);
+    if (snap) {
+      state.turnEndSnapshots![unit.id] = snap;
+    } else {
+      delete state.turnEndSnapshots![unit.id];
+    }
+  };
+
+  if (entry.kind === 'unit') {
+    const unit = state.units.find((u) => u.id === entry.unitId) ?? null;
+    applySnapshot(unit);
+    return;
+  }
+
+  if (entry.kind === 'group') {
+    const units = getGroupTurnUnits(state, entry.groupId);
+    for (const unit of units) applySnapshot(unit);
+  }
 }
 
 function fmtPos(p?: { x: number; z: number }) {

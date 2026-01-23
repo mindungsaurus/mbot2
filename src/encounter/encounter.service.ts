@@ -46,6 +46,7 @@ export class EncounterService {
       markers: [],
       turnOrder: [],
       turnIndex: 0,
+      turnEndSnapshots: {},
       battleStarted: false,
       round: 1,
       updatedAt: now,
@@ -254,6 +255,14 @@ export class EncounterService {
       (next as any).turnGroups = [];
       changed = true;
     }
+    if (
+      !next.turnEndSnapshots ||
+      typeof next.turnEndSnapshots !== 'object' ||
+      Array.isArray(next.turnEndSnapshots)
+    ) {
+      (next as any).turnEndSnapshots = {};
+      changed = true;
+    }
 
     // pos 없는 유닛 자동 배치: z=0, x는 0부터 순서대로
     let xCursor = 0;
@@ -324,6 +333,16 @@ export class EncounterService {
     });
 
     if ((next as any).turnOrder.length !== beforeLen) changed = true;
+
+    if (next.turnEndSnapshots) {
+      const beforeKeys = Object.keys(next.turnEndSnapshots);
+      for (const key of beforeKeys) {
+        if (!unitIds.has(key)) {
+          delete next.turnEndSnapshots[key];
+          changed = true;
+        }
+      }
+    }
 
     // turnIndex 보정: "유닛/그룹만 턴 주체" (label이면 첫 턴 엔트리로)
     const order = (next as any).turnOrder as any[];

@@ -26,7 +26,7 @@ export class ItemsController {
   }
 
   @Get('catalog')
-  @UseGuards(AuthGuard, AdminGuard)
+  @UseGuards(AuthGuard)
   async listCatalog() {
     return this.items.ListItemCatalog();
   }
@@ -67,3 +67,4 @@ export class ItemsController {
     return { ok: true };
   }
 }
+

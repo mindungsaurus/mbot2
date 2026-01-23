@@ -105,6 +105,13 @@ export type TurnEntry =
   | { kind: 'marker'; markerId: string }
   | { kind: 'group'; groupId: string };
 
+export type TurnEndSnapshot = {
+  spellSlots?: string;
+  consumables?: string;
+  toggleTags?: string;
+  manualStacks?: string;
+};
+
 export interface EncounterState {
   id: string;
   units: Unit[];
@@ -113,6 +120,7 @@ export interface EncounterState {
   turnOrder: TurnEntry[];
   turnGroups?: TurnGroup[];
   turnIndex: number;
+  turnEndSnapshots?: Record<string, TurnEndSnapshot>;
   battleStarted?: boolean;
   identifierCounters?: Record<string, number>;
 
@@ -225,6 +233,12 @@ export type Action =
   | { type: 'SET_SIDE_NOTES'; notes: Partial<Record<Side, string | null>> }
   | { type: 'APPLY_DAMAGE'; unitId: string; amount: number }
   | { type: 'HEAL'; unitId: string; amount: number }
+  | {
+      type: 'EDIT_MAX_HP';
+      unitId: string;
+      delta: number;
+      applyToCur?: boolean;
+    }
   | {
       type: 'SET_TEMP_HP';
       unitId: string;

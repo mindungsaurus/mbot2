@@ -120,7 +120,8 @@ export interface EncounterState {
   turnOrder: TurnEntry[];
   turnGroups?: TurnGroup[];
   turnIndex: number;
-  turnEndSnapshots?: Record<string, TurnEndSnapshot>;
+  turnEndSnapshots?: Record<string, TurnEndSnapshot>
+  turnStartSnapshots?: Record<string, TurnEndSnapshot>;
   battleStarted?: boolean;
   identifierCounters?: Record<string, number>;
 

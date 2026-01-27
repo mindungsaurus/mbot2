@@ -251,6 +251,7 @@ export function applyActionInPlace(
       const firstName = firstEntry ? turnEntryLabel(state, firstEntry) : null;
       const msg = firstName ? `전투 개시. 첫 턴: ${firstName}.` : '전투 개시.';
       pushLog(state, 'ACTION', msg, action, makeLogCtx(state));
+      captureTurnStartSnapshot(state, firstEntry);
       return;
     }
     case 'SET_SIDE_NOTES': {
@@ -860,6 +861,8 @@ export function applyActionInPlace(
         applyGroupTurnDecays(state, nextEntry.groupId, 'start', action, ctxAfter);
       }
 
+      captureTurnStartSnapshot(state, nextEntry);
+
       return;
     }
 
@@ -1449,6 +1452,11 @@ export function applyActionInPlace(
       if (state.turnEndSnapshots) {
         for (const removeId of removeIds) {
           delete state.turnEndSnapshots[removeId];
+        }
+      }
+      if ((state as any).turnStartSnapshots) {
+        for (const removeId of removeIds) {
+          delete (state as any).turnStartSnapshots[removeId];
         }
       }
 
@@ -2641,6 +2649,32 @@ function captureTurnEndSnapshot(state: EncounterState, entry: TurnEntry | null |
   }
 }
 
+
+function captureTurnStartSnapshot(state: EncounterState, entry: TurnEntry | null | undefined) {
+  if (!entry) return;
+  (state as any).turnStartSnapshots ??= {};
+
+  const applySnapshot = (unit: Unit | null | undefined) => {
+    if (!unit) return;
+    const snap = buildTurnEndSnapshot(unit);
+    if (snap) {
+      (state as any).turnStartSnapshots![unit.id] = snap;
+    } else {
+      delete (state as any).turnStartSnapshots![unit.id];
+    }
+  };
+
+  if (entry.kind === 'unit') {
+    const unit = state.units.find((u) => u.id === entry.unitId) ?? null;
+    applySnapshot(unit);
+    return;
+  }
+
+  if (entry.kind === 'group') {
+    const units = getGroupTurnUnits(state, entry.groupId);
+    for (const unit of units) applySnapshot(unit);
+  }
+}
 function fmtPos(p?: { x: number; z: number }) {
   if (!p) return '(x=?, z=?)';
   return `(x=${p.x}, z=${p.z})`;

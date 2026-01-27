@@ -10,6 +10,7 @@ import {
 import { ItemsService } from './items.service';
 import { AuthGuard } from '../auth/auth.guard';
 import { AdminGuard } from '../auth/admin.guard';
+import { ItemsTransactionsInfoDTO } from './ItemsTransactionsInfo-dto';
 
 @Controller('items')
 export class ItemsController {
@@ -29,6 +30,33 @@ export class ItemsController {
   @UseGuards(AuthGuard)
   async listCatalog() {
     return this.items.ListItemCatalog();
+  }
+
+  @Post('catalog/add')
+  @UseGuards(AuthGuard, AdminGuard)
+  async addCatalog(
+    @Body()
+    body: { itemName?: string; quality?: string; type?: string; unit?: string },
+  ) {
+    const itemName = (body?.itemName ?? '').trim();
+    const quality = (body?.quality ?? '').trim();
+    const type = (body?.type ?? '').trim();
+    const unit = (body?.unit ?? '').trim();
+    if (!itemName) throw new BadRequestException('item name required');
+    if (!quality) throw new BadRequestException('item quality required');
+    if (!type) throw new BadRequestException('item type required');
+    if (!unit) throw new BadRequestException('item unit required');
+
+    const payload: ItemsTransactionsInfoDTO = {
+      owner: 'system',
+      amount: 1,
+      item_name: itemName,
+      item_quality: quality,
+      item_type: type,
+      item_unit: unit,
+    };
+    await this.items.AddItemInfo(payload);
+    return { ok: true };
   }
 
   @Post('inventory/add')

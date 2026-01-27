@@ -47,6 +47,7 @@ export class EncounterService {
       turnOrder: [],
       turnIndex: 0,
       turnEndSnapshots: {},
+      turnStartSnapshots: {},
       battleStarted: false,
       round: 1,
       updatedAt: now,
@@ -85,6 +86,21 @@ export class EncounterService {
     }
 
     return next;
+  }
+
+  async remove(userId: string, id: string) {
+    const row = await this.prisma.encounter.findFirst({
+      where: { id, ownerId: userId },
+      select: { id: true },
+    });
+    if (!row) throw new NotFoundException('encounter not found');
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.encounterUndo.deleteMany({ where: { encounterId: id } });
+      await tx.encounter.delete({ where: { id } });
+    });
+
+    return { ok: true };
   }
 
   async apply(
@@ -264,6 +280,15 @@ export class EncounterService {
       changed = true;
     }
 
+    if (
+      !(next as any).turnStartSnapshots ||
+      typeof (next as any).turnStartSnapshots !== 'object' ||
+      Array.isArray((next as any).turnStartSnapshots)
+    ) {
+      (next as any).turnStartSnapshots = {};
+      changed = true;
+    }
+
     // pos 없는 유닛 자동 배치: z=0, x는 0부터 순서대로
     let xCursor = 0;
     for (const u of next.units ?? []) {
@@ -339,6 +364,19 @@ export class EncounterService {
       for (const key of beforeKeys) {
         if (!unitIds.has(key)) {
           delete next.turnEndSnapshots[key];
+          changed = true;
+        }
+      }
+    }
+
+    const turnStartSnapshots = (next as any).turnStartSnapshots as
+      | Record<string, any>
+      | undefined;
+    if (turnStartSnapshots) {
+      const beforeKeys = Object.keys(turnStartSnapshots);
+      for (const key of beforeKeys) {
+        if (!unitIds.has(key)) {
+          delete turnStartSnapshots[key];
           changed = true;
         }
       }

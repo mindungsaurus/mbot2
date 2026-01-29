@@ -1441,7 +1441,10 @@ export function applyActionInPlace(
       }
 
       const order = Array.isArray(state.turnOrder) ? state.turnOrder : [];
-      const activeKey = getTurnEntryKey(getActiveTurnEntry(state).entry);
+      const active = getActiveTurnEntry(state);
+      const activeKey = active.isTemp
+        ? getTurnEntryKey(order[state.turnIndex])
+        : getTurnEntryKey(active.entry);
 
       if (state.tempTurnStack?.length) {
         state.tempTurnStack = state.tempTurnStack.filter((x) => !removeIds.has(x));
@@ -1563,7 +1566,10 @@ export function applyActionInPlace(
 
     case 'SET_TURN_ORDER': {
       const ctx = makeLogCtx(state);
-      const activeKey = getTurnEntryKey(getActiveTurnEntry(state).entry);
+      const active = getActiveTurnEntry(state);
+      const activeKey = active.isTemp
+        ? getTurnEntryKey(state.turnOrder?.[state.turnIndex])
+        : getTurnEntryKey(active.entry);
 
       const nextGroups = normalizeTurnGroups(state, (action as any).turnGroups);
       state.turnGroups = nextGroups;
@@ -2432,7 +2438,10 @@ function removeUnitFromTurnOrder(state: EncounterState, unitId: string) {
   const order = Array.isArray(state.turnOrder) ? state.turnOrder : [];
   if (order.length === 0) return;
 
-  const activeKey = getTurnEntryKey(getActiveTurnEntry(state).entry);
+  const active = getActiveTurnEntry(state);
+  const activeKey = active.isTemp
+    ? getTurnEntryKey(order[state.turnIndex])
+    : getTurnEntryKey(active.entry);
 
   const filtered = order.filter((t: any) => {
     if (t?.kind === 'unit') return t.unitId !== unitId;

@@ -6,6 +6,7 @@ import { GoldService } from 'src/gold/gold.service';
 import { ItemsComponents } from './items.components';
 import { ItemsController } from './items.controller';
 import { AuthModule } from '../auth/auth.module';
+import { ItemsPublisher } from './items.publisher';
 
 @Module({
   imports: [AuthModule],
@@ -13,6 +14,7 @@ import { AuthModule } from '../auth/auth.module';
   providers: [
     ItemsService,
     ItemsCommands,
+    ItemsPublisher,
     {
       provide: PrismaClient,
       useFactory: () => new PrismaClient(),

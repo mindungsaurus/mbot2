@@ -435,13 +435,14 @@ export class ItemsService {
       where: { owner_itemName: { owner: name, itemName: item } },
       select: { amount: true },
     });
+    const remaining = after?.amount ?? 0;
     if (after && after.amount === 0) {
       await this.prisma.inventory.delete({
         where: { owner_itemName: { owner: name, itemName: item } },
       });
     }
 
-    return { owner: name, itemName: item };
+    return { owner: name, itemName: item, remaining };
   }
 
   public async AddItemInfo(payload: ItemsTransactionsInfoDTO) {
@@ -1497,5 +1498,56 @@ export class ItemsService {
 
     pushBuf();
     return res;
+  }
+
+  public ansiColor(color: TextColor): string {
+    switch (color) {
+      case TextColor.BOLD_YELLOW:
+        return "[1;33m";
+      case TextColor.BOLD_RED:
+        return "[1;31m";
+      case TextColor.BOLD_GREEN:
+        return "[1;36m";
+      case TextColor.BOLD_WHITE:
+        return "[1;38m";
+      case TextColor.BOLD_PINK:
+        return "[1;35m";
+      case TextColor.BOLD_BLUE:
+        return "[2;34m";
+      case TextColor.BOLD_LIME:
+        return "[1;32m";
+      case TextColor.BOLD_GRAY:
+        return "[1;30m";
+      default:
+        return "";
+    }
+  }
+
+  public formatItemNameAnsi(
+    itemName: string,
+    qualityLabel: string,
+    baseColor: string,
+  ): string {
+    const qualityColor = this.ansiColor(this.ColorParser(qualityLabel));
+    return `${qualityColor} [${itemName}]${baseColor}`;
+  }
+
+  public async getItemMeta(itemName: string): Promise<{
+    qualityLabel: string;
+    type: string;
+    unit: string;
+  }> {
+    const row = await this.prisma.itemsInfo.findUnique({
+      where: { name: itemName },
+      select: { quality: true, type: true, unit: true },
+    });
+    if (!row) {
+      return { qualityLabel: "", type: "", unit: "" };
+    }
+    return {
+      qualityLabel: this.QualityNumParser(row.quality),
+      type: row.type ?? "",
+      unit: row.unit ?? "",
+    };
   }
 }

@@ -180,8 +180,8 @@ function fmtResources(u: Unit): string {
 
 function fmtDeathSaves(u: Unit): string {
   const success = Math.max(0, Math.floor(u.deathSaves?.success ?? 0));
-  const failure = Math.max(0, Math.floor(u.deathSaves?.failure ?? 0));
-  if (success === 0 && failure === 0) return '';
+  const failure = Math.max(-1, Math.floor(u.deathSaves?.failure ?? -1));
+  if (success === 0 && failure === -1) return '';
   return `(${colorNumber(success, DEATH_SUCCESS_COLOR)}, ${colorNumber(
     failure,
     DEATH_FAILURE_COLOR,

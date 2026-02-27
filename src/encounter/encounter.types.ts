@@ -231,6 +231,7 @@ export interface UnitPatch {
 
 export type Action =
   | { type: 'BATTLE_START' }
+  | { type: 'RESET_ROUND' }
   | { type: 'SET_SIDE_NOTES'; notes: Partial<Record<Side, string | null>> }
   | { type: 'APPLY_DAMAGE'; unitId: string; amount: number }
   | { type: 'HEAL'; unitId: string; amount: number }

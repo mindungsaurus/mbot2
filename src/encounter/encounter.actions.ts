@@ -229,6 +229,27 @@ export function applyActionInPlace(
   action: Action,
 ): void {
   switch (action.type) {
+
+    case 'RESET_ROUND': {
+      const ctx = makeLogCtx(state);
+      (state as any).round = 1;
+      state.battleStarted = false;
+      state.turnIndex = 0;
+      state.turnEndSnapshots = {};
+      state.turnStartSnapshots = {};
+      state.tempTurnStack = [];
+      delete state.tempTurnStack;
+
+      pushLog(
+        state,
+        'ACTION',
+        '\ub77c\uc6b4\ub4dc \ucd08\uae30\ud654: \uc804\ud22c \uac1c\uc2dc \uc804 \uc0c1\ud0dc\ub85c \ub418\ub3cc\ub838\uc2b5\ub2c8\ub2e4. (\ub77c\uc6b4\ub4dc=1)',
+        action,
+        ctx,
+      );
+      return;
+    }
+
     case 'BATTLE_START': {
       if (state.battleStarted) return;
 
@@ -510,8 +531,8 @@ export function applyActionInPlace(
         Math.floor(Number(u.deathSaves?.success ?? 0)),
       );
       const beforeFailure = Math.max(
-        0,
-        Math.floor(Number(u.deathSaves?.failure ?? 0)),
+        -1,
+        Math.floor(Number(u.deathSaves?.failure ?? -1)),
       );
 
       let nextSuccess = beforeSuccess;
@@ -527,10 +548,10 @@ export function applyActionInPlace(
       }
 
       if (typeof action.failure === 'number') {
-        nextFailure = Math.max(0, Math.floor(action.failure));
+        nextFailure = Math.max(-1, Math.floor(action.failure));
       } else if (typeof action.deltaFailure === 'number') {
         nextFailure = Math.max(
-          0,
+          -1,
           Math.floor(beforeFailure + action.deltaFailure),
         );
       }

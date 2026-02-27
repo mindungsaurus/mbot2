@@ -7,10 +7,11 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
-import { ItemsService } from './items.service';
+import { ItemsService, GiveResult } from './items.service';
 import { AuthGuard } from '../auth/auth.guard';
 import { AdminGuard } from '../auth/admin.guard';
 import { ItemsTransactionsInfoDTO } from './ItemsTransactionsInfo-dto';
+import { ItemsTradeInfoDTO } from './ItemsTradeInfo-dto';
 import { ItemsPublisher } from './items.publisher';
 import { TextColor } from 'src/gold/gold.service';
 
@@ -85,6 +86,27 @@ export class ItemsController {
       `${white} \u{1F4E6} [\uc544\uc774\ud15c \uc18c\ubaa8 \uc774\ubca4\ud2b8 \ubc1c\uc0dd \uc54c\ub9bc]`,
       `${white} \u300c${owner}\u300d, ${itemAnsi}${white} (\uc744)\ub97c ${amount}${unit}\ub9cc\ud07c \uc18c\ubaa8\ud558\uc600\ub2e4.`,
       `${gray} \u300c${owner}\u300d, ${itemAnsiGray}${gray}\uc758 \ub0a8\uc740 \uc218\ub7c9: ${remaining}${unit}`,
+    ].join('\n');
+  }
+
+  private buildGiveAnsi(
+    from: string,
+    to: string,
+    itemName: string,
+    qualityLabel: string,
+    amount: number,
+    unit: string,
+    fromRemaining: number,
+    toTotal: number,
+  ) {
+    const white = this.items.ansiColor(TextColor.BOLD_WHITE);
+    const gray = this.items.ansiColor(TextColor.BOLD_GRAY);
+    const itemAnsi = this.items.formatItemNameAnsi(itemName, qualityLabel, white);
+    return [
+      `${white} \u{1F4E6} [\uc544\uc774\ud15c \uc804\ub2ec \uc774\ubca4\ud2b8 \ubc1c\uc0dd \uc54c\ub9bc]`,
+      `${white} \u300c${from}\u300d, \u300c${to}\u300d\uc5d0\uac8c ${itemAnsi} \ub97c ${amount}${unit}\ub9cc\ud07c \uc804\ub2ec\ud558\uc600\ub2e4.`,
+      `${gray} \u300c${from}\u300d, [${itemName}]\uc758 \ub0a8\uc740 \uc218\ub7c9: ${fromRemaining}${unit}`,
+      `${gray} \u300c${to}\u300d, [${itemName}]\uc758 \ub0a8\uc740 \uc218\ub7c9: ${toTotal}${unit}`,
     ].join('\n');
   }
 
@@ -206,5 +228,54 @@ export class ItemsController {
     await this.sendItemEvent(channelId, ansi);
     return { ok: true };
   }
-}
+  @Post('inventory/give')
+  @UseGuards(AuthGuard, AdminGuard)
+  async giveInventory(
+    @Body()
+    body: {
+      fromName?: string;
+      toName?: string;
+      itemName?: string;
+      amount?: number;
+      channelId?: string;
+    },
+  ) {
+    const fromName = (body?.fromName ?? '').trim();
+    const toName = (body?.toName ?? '').trim();
+    const itemName = (body?.itemName ?? '').trim();
+    const amount = Math.trunc(Number(body?.amount ?? 0));
+    const channelId = (body?.channelId ?? '').trim();
+    if (!fromName) throw new BadRequestException('from required');
+    if (!toName) throw new BadRequestException('to required');
+    if (!itemName) throw new BadRequestException('item name required');
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new BadRequestException('amount must be positive');
+    }
 
+    const payload: ItemsTradeInfoDTO = {
+      fromName,
+      toName,
+      itemName,
+      amount,
+    };
+    const result = new GiveResult();
+    await this.items.TryGiveItem(payload, result);
+    if (result.scenario !== 0) {
+      return { ok: false, ...result };
+    }
+
+    const ansi = this.buildGiveAnsi(
+      result.from ?? fromName,
+      result.to ?? toName,
+      result.itemName ?? itemName,
+      result.quality ?? '',
+      result.moved ?? amount,
+      result.unit ?? '',
+      result.fromRemaining ?? 0,
+      result.toTotal ?? 0,
+    );
+    await this.sendItemEvent(channelId, ansi);
+    return { ok: true, ...result };
+  }
+
+}

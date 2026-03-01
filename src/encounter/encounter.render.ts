@@ -10,6 +10,7 @@ import { buildFormationLines } from './encounter.formation';
 
 const RESET = '\x1b[0m';
 const GRAY = '\x1b[0;37m';
+const GROUP_MEMBERS_GRAY = '\x1b[0;30m';
 const AC_COLOR = '\x1b[0;38m';
 
 function color(code: number) {
@@ -24,6 +25,7 @@ const DEATH_SUCCESS_COLOR = color(36); // cyan
 const DEATH_FAILURE_COLOR = color(31); // red
 const SLOT_COLOR = color(34); // blue
 const CONSUMABLE_COLOR = color(33); // yellow
+const TURN_PRIORITY_COLOR = colorPlain(33); // non-bold yellow
 const DISABLED_COLOR = '\x1b[1;30m';
 
 function colorNumber(value: number | string, tint: string) {
@@ -86,6 +88,74 @@ function groupHasMembers(state: EncounterState, groupId: string): boolean {
     return true;
   }
   return false;
+}
+
+function splitIdentifierLabel(label: string): { base: string; suffix: string | null } {
+  const raw = (label ?? '').trim();
+  if (!raw) return { base: raw, suffix: null };
+  const bracket = raw.match(/\[([^\]]+)\]$/u);
+  if (bracket?.[1]) {
+    return { base: raw.slice(0, -bracket[0].length), suffix: bracket[1] };
+  }
+  const tail = raw.match(/([ㄱ-ㅎA-Za-z0-9α-ωΑ-Ω])$/u);
+  if (tail?.[1] && raw.length > tail[1].length) {
+    return { base: raw.slice(0, -tail[1].length), suffix: tail[1] };
+  }
+  return { base: raw, suffix: null };
+}
+
+function collapseIdentifierLabels(labels: string[]): string[] {
+  const grouped: Array<{ base: string; label: string; suffixes: string[] | null }> = [];
+  const baseIndex = new Map<string, number>();
+  for (const label of labels) {
+    const { base, suffix } = splitIdentifierLabel(label);
+    if (suffix && base) {
+      const idx = baseIndex.get(base);
+      if (idx !== undefined) {
+        grouped[idx].suffixes?.push(suffix);
+      } else {
+        grouped.push({ base, label, suffixes: [suffix] });
+        baseIndex.set(base, grouped.length - 1);
+      }
+      continue;
+    }
+    grouped.push({ base: label, label, suffixes: null });
+  }
+  return grouped.map((g) => (g.suffixes ? `${g.base}${g.suffixes.join('')}` : g.label));
+}
+
+function groupMembersSummary(state: EncounterState, groupId: string): string {
+  const g = Array.isArray(state.turnGroups)
+    ? state.turnGroups.find((x) => x.id === groupId)
+    : null;
+  if (!g || !Array.isArray(g.unitIds) || g.unitIds.length === 0) return '';
+  const labels: string[] = [];
+  for (const id of g.unitIds) {
+    const u = state.units.find((x) => x.id === id);
+    if (!u) continue;
+    if ((u as any)?.bench) continue;
+    if (normalizeUnitType(u) !== 'NORMAL') continue;
+    if (u.turnDisabled) continue;
+    const label = formatUnitLabel(u, u?.name?.trim?.() || id);
+    if (!label) continue;
+    labels.push(label);
+  }
+  if (!labels.length) return '';
+  return collapseIdentifierLabels(labels).join(', ');
+}
+
+function getTurnPriority(state: EncounterState, key: string): number | null {
+  const map = (state as any).turnPriorities as Record<string, number> | undefined;
+  if (!map || typeof map !== 'object') return null;
+  const n = Math.floor(Number((map as any)[key]));
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return n;
+}
+
+function withTurnPriority(state: EncounterState, key: string, text: string): string {
+  const n = getTurnPriority(state, key);
+  if (n == null) return text;
+  return `${text} ${TURN_PRIORITY_COLOR}(${n})${color(38)}`;
 }
 
 function fmtTags(u: Unit, tagColors?: Record<string, number>) {
@@ -330,7 +400,13 @@ function renderTurnLine(state: EncounterState): string {
         }
         if (t.kind === 'group') {
           if (!groupHasMembers(state, t.groupId)) return '';
-          return groupLabel(state, t.groupId);
+          const key = `group:${t.groupId}`;
+          const base = groupLabel(state, t.groupId);
+          const members = groupMembersSummary(state, t.groupId);
+          const withMembers = members
+            ? `${base} ${GROUP_MEMBERS_GRAY}[${members}]${color(38)}`
+            : base;
+          return withTurnPriority(state, key, withMembers);
         }
         const u = state.units.find((x) => x.id === t.unitId);
         if (!u) return '';
@@ -340,8 +416,10 @@ function renderTurnLine(state: EncounterState): string {
           u,
           u?.alias?.trim?.() || u?.name || t.unitId,
         );
-        if (u?.turnDisabled) return `${DISABLED_COLOR}${label}${color(38)}`;
-        return label;
+        const key = `unit:${u.id}`;
+        if (u?.turnDisabled)
+          return withTurnPriority(state, key, `${DISABLED_COLOR}${label}${color(38)}`);
+        return withTurnPriority(state, key, label);
       })
       .filter(Boolean);
     return parts.join(' - ');
@@ -377,19 +455,28 @@ function renderTurnLine(state: EncounterState): string {
       }
       if (t.kind === 'group') {
         if (!groupHasMembers(state, t.groupId)) return '';
-        const label = groupLabel(state, t.groupId);
-        return isActive ? highlight(label) : label;
+        const key = `group:${t.groupId}`;
+        const base = isActive
+          ? highlight(groupLabel(state, t.groupId))
+          : groupLabel(state, t.groupId);
+        const members = groupMembersSummary(state, t.groupId);
+        const withMembers = members
+          ? `${base} ${GROUP_MEMBERS_GRAY}[${members}]${color(38)}`
+          : base;
+        return withTurnPriority(state, key, withMembers);
       }
       const u = state.units.find((x) => x.id === t.unitId);
       if (!u) return '';
       if ((u as any)?.bench) return '';
       if (normalizeUnitType(u) !== 'NORMAL') return '';
       const label = formatUnitLabel(
-        u,
-        u?.alias?.trim?.() || u?.name || t.unitId,
-      );
-      if (u?.turnDisabled) return `${DISABLED_COLOR}${label}${color(38)}`;
-      return isActive ? highlight(label) : label;
+          u,
+          u?.alias?.trim?.() || u?.name || t.unitId,
+        );
+      const key = `unit:${u.id}`;
+      if (u?.turnDisabled)
+        return withTurnPriority(state, key, `${DISABLED_COLOR}${label}${color(38)}`);
+      return withTurnPriority(state, key, isActive ? highlight(label) : label);
     })
     .filter(Boolean);
 

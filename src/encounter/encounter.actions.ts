@@ -1585,6 +1585,73 @@ export function applyActionInPlace(
       return;
     }
 
+    case 'SET_TURN_ORDER_BY_PRIORITY': {
+      const rawOrder = Array.isArray((action as any).turnOrder)
+        ? (action as any).turnOrder
+        : [];
+      const prioritiesRaw = (action as any).priorities ?? {};
+      const priorityMap = new Map<string, number>();
+      for (const [rawKey, rawValue] of Object.entries(prioritiesRaw)) {
+        const key = String(rawKey ?? '').trim();
+        const n = Math.floor(Number(rawValue));
+        if (!key || !Number.isFinite(n) || n <= 0) continue;
+        priorityMap.set(key, n);
+      }
+
+      if (rawOrder.length === 0 || priorityMap.size === 0) {
+        applyActionInPlace(state, {
+          type: 'SET_TURN_ORDER',
+          turnOrder: rawOrder,
+          turnGroups: (action as any).turnGroups,
+          priorities: Object.fromEntries(priorityMap.entries()),
+        } as Action);
+        return;
+      }
+
+      const sortable = rawOrder
+        .map((entry: any, index: number) => {
+          if (!entry || typeof entry !== 'object') return null;
+          const key =
+            entry.kind === 'unit'
+              ? 'unit:' + String(entry.unitId ?? '').trim()
+              : entry.kind === 'group'
+                ? 'group:' + String(entry.groupId ?? '').trim()
+                : null;
+          if (!key) return null;
+          const score = priorityMap.get(key);
+          if (!score) return null;
+          return { entry: entry as TurnEntry, index, score };
+        })
+        .filter(
+          (
+            x,
+          ): x is { entry: TurnEntry; index: number; score: number } => !!x,
+        )
+        .sort((a, b) => b.score - a.score || a.index - b.index);
+
+      let cursor = 0;
+      const sortedOrder = rawOrder.map((entry: any) => {
+        const key =
+          entry?.kind === 'unit'
+            ? 'unit:' + String(entry.unitId ?? '').trim()
+            : entry?.kind === 'group'
+              ? 'group:' + String(entry.groupId ?? '').trim()
+              : null;
+        if (!key || !priorityMap.has(key)) return entry;
+        const replacement = sortable[cursor];
+        cursor += 1;
+        return replacement?.entry ?? entry;
+      });
+
+      applyActionInPlace(state, {
+        type: 'SET_TURN_ORDER',
+        turnOrder: sortedOrder as TurnEntry[],
+        turnGroups: (action as any).turnGroups,
+        priorities: Object.fromEntries(priorityMap.entries()),
+      } as Action);
+      return;
+    }
+
     case 'SET_TURN_ORDER': {
       const ctx = makeLogCtx(state);
       const active = getActiveTurnEntry(state);
@@ -1667,6 +1734,45 @@ export function applyActionInPlace(
       }
 
       state.turnOrder = nextOrder;
+      const validPriorityKeys = new Set<string>();
+      for (const entry of nextOrder) {
+        if (entry.kind === 'unit') validPriorityKeys.add(`unit:${entry.unitId}`);
+        else if (entry.kind === 'group')
+          validPriorityKeys.add(`group:${entry.groupId}`);
+      }
+      const incomingPriorities = (action as any).priorities as
+        | Record<string, number>
+        | undefined;
+      if (incomingPriorities && typeof incomingPriorities === 'object') {
+        const nextPriorities: Record<string, number> = {};
+        for (const [rawKey, rawValue] of Object.entries(incomingPriorities)) {
+          const key = String(rawKey ?? '').trim();
+          if (!key || !validPriorityKeys.has(key)) continue;
+          const n = Math.floor(Number(rawValue));
+          if (!Number.isFinite(n) || n <= 0) continue;
+          nextPriorities[key] = n;
+        }
+        if (Object.keys(nextPriorities).length > 0) {
+          (state as any).turnPriorities = nextPriorities;
+        } else {
+          delete (state as any).turnPriorities;
+        }
+      } else if ((state as any).turnPriorities) {
+        const cur = (state as any).turnPriorities as Record<string, number>;
+        const nextPriorities: Record<string, number> = {};
+        for (const [rawKey, rawValue] of Object.entries(cur)) {
+          const key = String(rawKey ?? '').trim();
+          if (!key || !validPriorityKeys.has(key)) continue;
+          const n = Math.floor(Number(rawValue));
+          if (!Number.isFinite(n) || n <= 0) continue;
+          nextPriorities[key] = n;
+        }
+        if (Object.keys(nextPriorities).length > 0) {
+          (state as any).turnPriorities = nextPriorities;
+        } else {
+          delete (state as any).turnPriorities;
+        }
+      }
 
       if (nextOrder.length === 0) {
         state.turnIndex = 0;

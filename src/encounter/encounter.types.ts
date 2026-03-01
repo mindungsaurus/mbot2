@@ -119,6 +119,7 @@ export interface EncounterState {
   sideNotes?: Partial<Record<Side, string>>;
   turnOrder: TurnEntry[];
   turnGroups?: TurnGroup[];
+  turnPriorities?: Record<string, number>;
   turnIndex: number;
   turnEndSnapshots?: Record<string, TurnEndSnapshot>
   turnStartSnapshots?: Record<string, TurnEndSnapshot>;
@@ -317,7 +318,14 @@ export type Action =
   | { type: 'GRANT_TEMP_TURN'; unitId: string }
   | { type: 'MOVE_TURN_ENTRY'; fromIndex: number; toIndex: number }
   | {
+      type: 'SET_TURN_ORDER_BY_PRIORITY';
+      turnOrder: TurnEntry[];
+      turnGroups?: TurnGroup[];
+      priorities?: Record<string, number>;
+    }
+  | {
       type: 'SET_TURN_ORDER';
       turnOrder: TurnEntry[];
       turnGroups?: TurnGroup[];
+      priorities?: Record<string, number>;
     };

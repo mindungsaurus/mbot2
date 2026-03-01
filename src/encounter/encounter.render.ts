@@ -402,11 +402,7 @@ function renderTurnLine(state: EncounterState): string {
           if (!groupHasMembers(state, t.groupId)) return '';
           const key = `group:${t.groupId}`;
           const base = groupLabel(state, t.groupId);
-          const members = groupMembersSummary(state, t.groupId);
-          const withMembers = members
-            ? `${base} ${GROUP_MEMBERS_GRAY}[${members}]${color(38)}`
-            : base;
-          return withTurnPriority(state, key, withMembers);
+          return withTurnPriority(state, key, base);
         }
         const u = state.units.find((x) => x.id === t.unitId);
         if (!u) return '';
@@ -459,11 +455,7 @@ function renderTurnLine(state: EncounterState): string {
         const base = isActive
           ? highlight(groupLabel(state, t.groupId))
           : groupLabel(state, t.groupId);
-        const members = groupMembersSummary(state, t.groupId);
-        const withMembers = members
-          ? `${base} ${GROUP_MEMBERS_GRAY}[${members}]${color(38)}`
-          : base;
-        return withTurnPriority(state, key, withMembers);
+        return withTurnPriority(state, key, base);
       }
       const u = state.units.find((x) => x.id === t.unitId);
       if (!u) return '';

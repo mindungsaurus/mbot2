@@ -194,7 +194,7 @@ export class DiceCommands {
     }
 
     try {
-      await interaction.deferReply({ flags: 'Ephemeral' });
+      await interaction.deferReply();
       if (!this.diceSearchService.hasConfiguredChannels('all')) {
         return interaction.editReply({
           content: this.goldService.StringFormatter(

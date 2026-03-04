@@ -16,7 +16,11 @@ import { TagPresetsModule } from './tag-presets/tag-presets.module';
   imports: [
     NecordModule.forRoot({
       token: process.env.DISCORD_TOKEN ?? '',
-      intents: [IntentsBitField.Flags.Guilds],
+      intents: [
+        IntentsBitField.Flags.Guilds,
+        IntentsBitField.Flags.GuildMessages,
+        IntentsBitField.Flags.MessageContent,
+      ],
       development: ['1284642997375336592', '1273347630767804539'],
     }),
     GoldModule,

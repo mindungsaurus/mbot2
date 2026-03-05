@@ -14,12 +14,14 @@ import { DiceExprTargetDTO } from './dto/diceExprTarget-dto';
 import { GoldService, TextColor } from 'src/gold/gold.service';
 import { DiceSearchService } from './dice.search.service';
 import { SearchTitleDTO } from './dto/searchTitle-dto';
+import { SearchSpellCategoryDTO } from './dto/searchSpellCategory-dto';
 import { ALLOWED } from 'src/gold/gold.commands';
 
 const CMP_SET = new Set(['>=', '>', '<=', '<', '==', '!=']);
 const SEARCH_ENV_HINT = 'SSPELL_CHANNEL_IDS, SSKILL_CHANNEL_IDS';
 const BOT_GUILDS = ['1284642997375336592', '1273347630767804539'];
 const DISCORD_MSG_LIMIT = 1900;
+const SSYNC_ALLOWED = new Set<string>(['1280856735023628308']);
 
 function chunkText(text: string, maxLen: number): string[] {
   if (!text) return [''];
@@ -221,6 +223,100 @@ export class DiceCommands {
   }
 
   @SlashCommand({
+    name: 'sspell-category',
+    description: '주문 레벨/학파로 주문명 목록 검색',
+    guilds: BOT_GUILDS,
+  })
+  public async searchSpellCategory(
+    @Context() [interaction]: SlashCommandContext,
+    @Options() dto: SearchSpellCategoryDTO,
+  ) {
+    try {
+      const level = (dto.level ?? '').trim();
+      const school = (dto.school ?? '').trim();
+      const learn = (dto.learn ?? '').trim();
+      if (!level || !school) {
+        return interaction.reply({
+          content: this.goldService.StringFormatter(
+            '🚫 level, school은 비어 있을 수 없습니다.',
+            TextColor.BOLD_RED,
+            true,
+            true,
+          ),
+        });
+      }
+
+      await interaction.deferReply();
+
+      if (!this.diceSearchService.hasConfiguredChannels('spell')) {
+        return interaction.editReply({
+          content: this.goldService.StringFormatter(
+            `🚫 검색 채널 환경변수가 비어 있습니다. (${SEARCH_ENV_HINT})`,
+            TextColor.BOLD_RED,
+            true,
+            true,
+          ),
+        });
+      }
+
+      if (this.diceSearchService.getSyncedAt() === 0) {
+        await this.diceSearchService.syncAll();
+      }
+
+      const names = await this.diceSearchService.searchSpellNamesByCategory(
+        level,
+        school,
+        learn,
+      );
+      if (!names.length) {
+        const learnText = learn ? `, 습득: ${learn}` : '';
+        return interaction.editReply({
+          content: this.goldService.StringFormatter(
+            `🔎 검색 결과 없음 (레벨: ${level}, 학파: ${school}${learnText})`,
+            TextColor.BOLD_YELLOW,
+            true,
+            true,
+          ),
+        });
+      }
+
+      const listBody = names.join('\n');
+      const title = `${level} / ${school}${learn ? ` / ${learn}` : ''} 주문 목록 (${names.length})`;
+      const chunks = chunkText(listBody, DISCORD_MSG_LIMIT - 120);
+      const messages: string[] = [];
+      for (let i = 0; i < chunks.length; i += 1) {
+        const body = i === 0 ? `${title}\n\n${chunks[i] ?? ''}` : chunks[i];
+        messages.push(`\`\`\`\n${body}\n\`\`\``);
+      }
+
+      await interaction.editReply({ content: messages[0] });
+      for (let i = 1; i < messages.length; i += 1) {
+        await interaction.followUp({ content: messages[i] });
+      }
+      return;
+    } catch (err: any) {
+      if (interaction.deferred || interaction.replied) {
+        return interaction.editReply({
+          content: this.goldService.StringFormatter(
+            `🚫 검색 실패: ${err?.message ?? err}`,
+            TextColor.BOLD_RED,
+            true,
+            true,
+          ),
+        });
+      }
+      return interaction.reply({
+        content: this.goldService.StringFormatter(
+          `🚫 검색 실패: ${err?.message ?? err}`,
+          TextColor.BOLD_RED,
+          true,
+          true,
+        ),
+      });
+    }
+  }
+
+  @SlashCommand({
     name: 'sskill',
     description: '기술 제목 통합 검색 (Top 1)',
     guilds: BOT_GUILDS,
@@ -238,7 +334,7 @@ export class DiceCommands {
     guilds: BOT_GUILDS,
   })
   public async syncSearchIndex(@Context() [interaction]: SlashCommandContext) {
-    if (!ALLOWED.has(interaction.user.id)) {
+    if (!SSYNC_ALLOWED.has(interaction.user.id)) {
       await interaction.reply({
         content: this.goldService.StringFormatter(
           `🚫 커맨드를 사용할 권한이 없습니다.\n 사용자 ID: ${interaction.user.id}`,
@@ -418,7 +514,23 @@ export class DiceCommands {
         await this.diceSearchService.syncAll();
       }
 
-      const match = await this.diceSearchService.searchTop(scope, keyword);
+      let match = null as Awaited<
+        ReturnType<DiceSearchService['searchTop']>
+      >;
+      if (scope === 'spell') {
+        const lvNo = keyword.match(/^\s*(\d+)\.(\d+)\s*$/);
+        if (lvNo) {
+          const level = Number.parseInt(lvNo[1], 10);
+          const number = Number.parseInt(lvNo[2], 10);
+          match = await this.diceSearchService.searchSpellByLevelAndNumber(
+            level,
+            number,
+          );
+        }
+      }
+      if (!match) {
+        match = await this.diceSearchService.searchTop(scope, keyword);
+      }
       if (!match) {
         return interaction.editReply({
           content: this.goldService.StringFormatter(

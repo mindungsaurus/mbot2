@@ -160,3 +160,63 @@ model TagPresetFolder {
   @@index([ownerId])
   @@index([parentId])
 }
+
+model SpellEntry {
+  id               Int      @id @default(autoincrement())
+  spellKey         String   @unique
+  sourceMessageId  String   @unique
+  sourceMessageUrl String
+  sourceChannelId  String
+  sourceChannelName String
+  sourceThreadId   String?
+  sourceThreadName String?
+
+  spellLevel       String
+  spellNumber      Int?
+  spellName        String
+  titleRaw         String
+  normalizedName   String
+
+  school           String?
+  rangeText        String?
+  damage           String?
+  learnText        String?
+  checkText        String?
+  concentration    String?
+  duration         String?
+  castCost         String?
+  etcText          String?
+  commentText      String?
+  componentsText   String?
+
+  bodyRaw          String
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([normalizedName])
+  @@index([spellLevel])
+}
+
+model SkillEntry {
+  id               Int      @id @default(autoincrement())
+  skillKey         String   @unique
+  sourceMessageId  String   @unique
+  sourceMessageUrl String
+  sourceChannelId  String
+  sourceChannelName String
+  sourceThreadId   String?
+  sourceThreadName String?
+
+  jobName          String
+  skillName        String
+  conditionText    String?
+  titleRaw         String
+  normalizedName   String
+  bodyRaw          String
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([normalizedName])
+  @@index([jobName])
+}

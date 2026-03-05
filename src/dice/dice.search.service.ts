@@ -5,6 +5,7 @@ import {
   PermissionFlagsBits,
   type Message,
 } from 'discord.js';
+import { PrismaClient } from '@prisma/client';
 
 type SearchScope = 'spell' | 'skill';
 
@@ -22,8 +23,6 @@ type SearchDoc = {
 };
 
 type SearchIndex = {
-  spells: SearchDoc[];
-  skills: SearchDoc[];
   syncedAt: number;
 };
 
@@ -47,6 +46,61 @@ type ScopeDiag = {
   warnings: string[];
 };
 
+type SpellParsed = {
+  spellKey: string;
+  sourceMessageId: string;
+  sourceMessageUrl: string;
+  sourceChannelId: string;
+  sourceChannelName: string;
+  sourceThreadId?: string;
+  sourceThreadName?: string;
+  spellLevel: string;
+  spellNumber?: number;
+  spellName: string;
+  titleRaw: string;
+  normalizedName: string;
+  school?: string;
+  rangeText?: string;
+  damage?: string;
+  learnText?: string;
+  checkText?: string;
+  concentration?: string;
+  duration?: string;
+  castCost?: string;
+  etcText?: string;
+  commentText?: string;
+  componentsText?: string;
+  bodyRaw: string;
+};
+
+type SkillParsed = {
+  skillKey: string;
+  sourceMessageId: string;
+  sourceMessageUrl: string;
+  sourceChannelId: string;
+  sourceChannelName: string;
+  sourceThreadId?: string;
+  sourceThreadName?: string;
+  jobName: string;
+  skillName: string;
+  conditionText?: string;
+  titleRaw: string;
+  normalizedName: string;
+  bodyRaw: string;
+};
+
+const SPELL_LABELS = [
+  '학파',
+  '사거리',
+  '피해',
+  '습득',
+  '판정',
+  '집중',
+  '지속',
+  '발동 시 소모',
+  '기타',
+] as const;
+
 function parseIdList(raw?: string): string[] {
   if (!raw) return [];
   return raw
@@ -57,6 +111,14 @@ function parseIdList(raw?: string): string[] {
 
 function normalize(s: string): string {
   return s.toLowerCase().replace(/\s+/g, '');
+}
+
+function unansi(s: string): string {
+  return s.replace(/\u001b\[[0-9;]*m/g, '');
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function extractBlocks(
@@ -83,9 +145,11 @@ function parseTitle(raw: string): string {
   return oneLine.replace(/^\d+\.\s*/, '').trim();
 }
 
+function parseTitleRaw(raw: string): string {
+  return raw.trim().split('\n')[0]?.trim() ?? '';
+}
+
 function stripFenceBoldWrapper(text: string): string {
-  // 코드블록만 감싸는 굵게 래퍼(**)는 렌더 시 불필요하게 노출되므로 제거
-  // 예: "**\n```ansi ... ```\n**" 또는 줄 중간의 "\n**\n```"
   let s = text;
   s = s.replace(/^\*\*\s*\n(?=```)/, '');
   s = s.replace(/\n\*\*\s*\n(?=```)/g, '\n');
@@ -105,12 +169,61 @@ function scoreTitle(docTitle: string, keyword: string): number {
   return 0;
 }
 
+function parseSpellLevelFromChannelName(channelName: string): string {
+  if (/소마법/i.test(channelName)) return '소마법';
+  const m = channelName.match(/(\d+)\s*레벨/);
+  if (m) return `${m[1]}레벨`;
+  return channelName;
+}
+
+function parseJobFromChannelName(channelName: string): string | undefined {
+  // 기술-{직업이름}직업군 / 기술-{직업이름}
+  const m = channelName.match(/^기술[-_\s]*([^-_\s].*?)(?:직업군)?$/);
+  if (!m) return undefined;
+  const v = (m[1] ?? '').trim();
+  return v || undefined;
+}
+
+function parseComponentsFromTail(tail: string): string | undefined {
+  const parts = [...tail.matchAll(/`([^`]+)`/g)]
+    .map((m) => (m[1] ?? '').trim())
+    .filter((v) => !!v);
+  if (!parts.length) return undefined;
+  return parts.join(', ');
+}
+
+function parseLabeledFields(text: string): Record<string, string> {
+  const clean = unansi(text).replace(/\r/g, '');
+  const escaped = SPELL_LABELS.map((l) => escapeRegExp(l)).join('|');
+  const re = new RegExp(`(^|\\n)\\s*(${escaped})\\s*:\\s*`, 'g');
+  const hits: Array<{ label: string; start: number; end: number }> = [];
+  let m: RegExpExecArray | null = null;
+  while ((m = re.exec(clean)) !== null) {
+    hits.push({
+      label: m[2],
+      start: m.index + (m[1]?.length ?? 0),
+      end: re.lastIndex,
+    });
+  }
+  const out: Record<string, string> = {};
+  for (let i = 0; i < hits.length; i += 1) {
+    const cur = hits[i];
+    const next = hits[i + 1];
+    const value = clean.slice(cur.end, next?.start ?? clean.length).trim();
+    out[cur.label] = value;
+  }
+  return out;
+}
+
 @Injectable()
 export class DiceSearchService {
   private readonly logger = new Logger(DiceSearchService.name);
-  private index: SearchIndex = { spells: [], skills: [], syncedAt: 0 };
+  private index: SearchIndex = { syncedAt: 0 };
 
-  constructor(private readonly client: Client) {}
+  constructor(
+    private readonly client: Client,
+    private readonly prisma: PrismaClient,
+  ) {}
 
   getSpellChannelIds(): string[] {
     return parseIdList(process.env.SSPELL_CHANNEL_IDS);
@@ -134,26 +247,118 @@ export class DiceSearchService {
   }
 
   async syncAll(): Promise<{ spells: number; skills: number; syncedAt: number }> {
-    const spells = await this.crawlSpells();
-    const skills = await this.crawlSkills();
+    const spells = await this.syncSpellsToDb();
+    const skills = await this.syncSkillsToDb();
     const syncedAt = Date.now();
-    this.index = { spells, skills, syncedAt };
-    return { spells: spells.length, skills: skills.length, syncedAt };
+    this.index = { syncedAt };
+    return { spells, skills, syncedAt };
   }
 
   async searchTop(scope: SearchScope, keyword: string): Promise<SearchMatch | null> {
-    const list = scope === 'spell' ? this.index.spells : this.index.skills;
-    if (!list.length) return null;
-
-    let best: SearchMatch | null = null;
-    for (const doc of list) {
-      const score = scoreTitle(doc.title, keyword);
-      if (score <= 0) continue;
-      if (!best || score > best.score) {
-        best = { doc, score };
-      }
+    if (scope === 'skill') {
+      return this.searchSkillTopDb(keyword);
     }
-    return best;
+    return this.searchSpellTopDb(keyword);
+  }
+
+  async searchSpellByLevelAndNumber(
+    level: number,
+    number: number,
+  ): Promise<SearchMatch | null> {
+    const model = this.getSpellModel();
+    const row = await model.findFirst({
+      where: {
+        spellLevel: `${level}레벨`,
+        spellNumber: number,
+      },
+      select: {
+        sourceMessageId: true,
+        sourceMessageUrl: true,
+        sourceChannelId: true,
+        sourceChannelName: true,
+        sourceThreadId: true,
+        sourceThreadName: true,
+        titleRaw: true,
+        spellName: true,
+        bodyRaw: true,
+      },
+    });
+    if (!row) return null;
+
+    const title = (row.titleRaw ?? row.spellName ?? '').trim();
+    const doc: SearchDoc = {
+      scope: 'spell',
+      title,
+      normalizedTitle: normalize(title),
+      body: (row.bodyRaw ?? '').trim(),
+      messageUrl: row.sourceMessageUrl,
+      messageId: row.sourceMessageId,
+      channelId: row.sourceChannelId,
+      channelName: row.sourceChannelName,
+      threadId: row.sourceThreadId ?? undefined,
+      threadName: row.sourceThreadName ?? undefined,
+    };
+    return { doc, score: 2000 };
+  }
+
+  async searchSpellNamesByCategory(
+    levelKeyword: string,
+    schoolKeyword: string,
+    learnKeyword?: string,
+  ): Promise<string[]> {
+    const levelRaw = (levelKeyword ?? '').trim();
+    const schoolRaw = (schoolKeyword ?? '').trim();
+    const learnRaw = (learnKeyword ?? '').trim();
+    if (!levelRaw || !schoolRaw) return [];
+
+    const levelNumOnly = levelRaw.match(/^\d+$/);
+    const levelNumLabel = levelRaw.match(/^(\d+)\s*레벨$/);
+    const normalizedLevel = /소마법/i.test(levelRaw)
+      ? '소마법'
+      : levelNumOnly
+        ? `${levelRaw}레벨`
+        : levelNumLabel
+          ? `${levelNumLabel[1]}레벨`
+          : levelRaw;
+
+    const model = this.getSpellModel();
+    const where: any = {
+      spellLevel: normalizedLevel,
+      school: {
+        contains: schoolRaw,
+        mode: 'insensitive',
+      },
+    };
+    if (learnRaw) {
+      where.learnText = {
+        contains: learnRaw,
+        mode: 'insensitive',
+      };
+    }
+
+    const rows: any[] = await model.findMany({
+      where,
+      select: {
+        spellName: true,
+        spellNumber: true,
+      },
+      orderBy: [{ spellNumber: 'asc' }, { spellName: 'asc' }],
+    });
+
+    const names: string[] = [];
+    const seen = new Set<string>();
+    for (const row of rows) {
+      const name = (row.spellName ?? '').trim();
+      if (!name) continue;
+      const line =
+        Number.isFinite(row.spellNumber) && row.spellNumber > 0
+          ? `${row.spellNumber}. ${name}`
+          : name;
+      if (seen.has(line)) continue;
+      seen.add(line);
+      names.push(line);
+    }
+    return names;
   }
 
   async diagnoseConfiguredChannels(): Promise<ScopeDiag[]> {
@@ -167,9 +372,109 @@ export class DiceSearchService {
     return out;
   }
 
-  private async crawlSpells(): Promise<SearchDoc[]> {
+  private getSpellModel(): any {
+    const model = (this.prisma as any).spellEntry;
+    if (!model) {
+      throw new Error(
+        'SpellEntry 모델이 Prisma Client에 없습니다. prisma migrate + prisma generate를 실행해 주세요.',
+      );
+    }
+    return model;
+  }
+
+  private getSkillModel(): any {
+    const model = (this.prisma as any).skillEntry;
+    if (!model) {
+      throw new Error(
+        'SkillEntry 모델이 Prisma Client에 없습니다. prisma migrate + prisma generate를 실행해 주세요.',
+      );
+    }
+    return model;
+  }
+
+  private async searchSpellTopDb(keyword: string): Promise<SearchMatch | null> {
+    const model = this.getSpellModel();
+    const rows: any[] = await model.findMany({
+      select: {
+        sourceMessageId: true,
+        sourceMessageUrl: true,
+        sourceChannelId: true,
+        sourceChannelName: true,
+        sourceThreadId: true,
+        sourceThreadName: true,
+        titleRaw: true,
+        spellName: true,
+        bodyRaw: true,
+      },
+    });
+    if (!rows.length) return null;
+
+    let best: SearchMatch | null = null;
+    for (const row of rows) {
+      const title = (row.titleRaw ?? row.spellName ?? '').trim();
+      const score = scoreTitle(title, keyword);
+      if (score <= 0) continue;
+      const doc: SearchDoc = {
+        scope: 'spell',
+        title,
+        normalizedTitle: normalize(title),
+        body: (row.bodyRaw ?? '').trim(),
+        messageUrl: row.sourceMessageUrl,
+        messageId: row.sourceMessageId,
+        channelId: row.sourceChannelId,
+        channelName: row.sourceChannelName,
+        threadId: row.sourceThreadId ?? undefined,
+        threadName: row.sourceThreadName ?? undefined,
+      };
+      if (!best || score > best.score) best = { doc, score };
+    }
+    return best;
+  }
+
+  private async searchSkillTopDb(keyword: string): Promise<SearchMatch | null> {
+    const model = this.getSkillModel();
+    const rows: any[] = await model.findMany({
+      select: {
+        sourceMessageId: true,
+        sourceMessageUrl: true,
+        sourceChannelId: true,
+        sourceChannelName: true,
+        sourceThreadId: true,
+        sourceThreadName: true,
+        titleRaw: true,
+        skillName: true,
+        bodyRaw: true,
+      },
+    });
+    if (!rows.length) return null;
+
+    let best: SearchMatch | null = null;
+    for (const row of rows) {
+      const title = (row.titleRaw ?? row.skillName ?? '').trim();
+      const score = scoreTitle(title, keyword);
+      if (score <= 0) continue;
+      const doc: SearchDoc = {
+        scope: 'skill',
+        title,
+        normalizedTitle: normalize(title),
+        body: (row.bodyRaw ?? '').trim(),
+        messageUrl: row.sourceMessageUrl,
+        messageId: row.sourceMessageId,
+        channelId: row.sourceChannelId,
+        channelName: row.sourceChannelName,
+        threadId: row.sourceThreadId ?? undefined,
+        threadName: row.sourceThreadName ?? undefined,
+      };
+      if (!best || score > best.score) best = { doc, score };
+    }
+    return best;
+  }
+
+  private async syncSpellsToDb(): Promise<number> {
+    const model = this.getSpellModel();
     const channelIds = this.getSpellChannelIds();
-    const out: SearchDoc[] = [];
+    let upsertCount = 0;
+
     for (const channelId of channelIds) {
       const ch = await this.client.channels.fetch(channelId).catch(() => null);
       if (!ch) {
@@ -177,39 +482,43 @@ export class DiceSearchService {
         continue;
       }
 
-      // 기본: 채널 메시지 직접 수집
       if (this.canFetchMessages(ch as any)) {
         const messages = await this.fetchAllMessages(ch as any);
         for (const msg of messages) {
-          const doc = this.parseMessageToDoc('spell', msg, {
+          const row = this.parseSpellFromMessage(msg, {
             channelId: ch.id,
             channelName: (ch as any).name ?? ch.id,
           });
-          if (doc) out.push(doc);
+          if (!row) continue;
+          await this.upsertSpellSafe(model, row);
+          upsertCount += 1;
         }
       }
 
-      // 포럼/스레드형 채널도 보조 수집
       const threads = await this.fetchAllThreads(ch as any);
       for (const thread of threads) {
         const msgs = await this.fetchAllMessages(thread as any);
         for (const msg of msgs) {
-          const doc = this.parseMessageToDoc('spell', msg, {
+          const row = this.parseSpellFromMessage(msg, {
             channelId: ch.id,
             channelName: (ch as any).name ?? ch.id,
             threadId: thread.id,
             threadName: thread.name,
           });
-          if (doc) out.push(doc);
+          if (!row) continue;
+          await this.upsertSpellSafe(model, row);
+          upsertCount += 1;
         }
       }
     }
-    return out;
+
+    return upsertCount;
   }
 
-  private async crawlSkills(): Promise<SearchDoc[]> {
+  private async syncSkillsToDb(): Promise<number> {
+    const model = this.getSkillModel();
     const channelIds = this.getSkillChannelIds();
-    const out: SearchDoc[] = [];
+    let upsertCount = 0;
 
     for (const channelId of channelIds) {
       const ch = await this.client.channels.fetch(channelId).catch(() => null);
@@ -217,22 +526,105 @@ export class DiceSearchService {
         this.logger.warn(`Skill channel not found: ${channelId}`);
         continue;
       }
+
+      // 직업별 공통 기술: 채널 본문 메시지에서 파싱
+      if (this.canFetchMessages(ch as any)) {
+        const messages = await this.fetchAllMessages(ch as any);
+        for (const msg of messages) {
+          const row = this.parseSkillFromMessage(msg, {
+            channelId: ch.id,
+            channelName: (ch as any).name ?? ch.id,
+          });
+          if (!row) continue;
+          await this.upsertSkillSafe(model, row);
+          upsertCount += 1;
+        }
+      }
+
       const allThreads = await this.fetchAllThreads(ch as any);
 
       for (const thread of allThreads) {
         const msgs = await this.fetchAllMessages(thread as any);
         for (const msg of msgs) {
-          const doc = this.parseMessageToDoc('skill', msg, {
+          const row = this.parseSkillFromMessage(msg, {
             channelId: ch.id,
             channelName: (ch as any).name ?? ch.id,
             threadId: thread.id,
             threadName: thread.name,
           });
-          if (doc) out.push(doc);
+          if (!row) continue;
+          await this.upsertSkillSafe(model, row);
+          upsertCount += 1;
         }
       }
     }
-    return out;
+    return upsertCount;
+  }
+
+  private async upsertSpellSafe(model: any, row: SpellParsed) {
+    // spellKey 기준으로 합치기 전에, 같은 sourceMessageId가 다른 key로 남아 있으면 제거
+    const byMsg = await model.findUnique({
+      where: { sourceMessageId: row.sourceMessageId },
+      select: { spellKey: true },
+    });
+    if (byMsg && byMsg.spellKey !== row.spellKey) {
+      await model.delete({ where: { sourceMessageId: row.sourceMessageId } });
+    }
+
+    try {
+      await model.upsert({
+        where: { spellKey: row.spellKey },
+        create: row,
+        update: row,
+      });
+    } catch (err: any) {
+      if (err?.code !== 'P2002') throw err;
+      // 동시/기존 데이터 꼬임으로 sourceMessageId unique 충돌 시 1회 정리 후 재시도
+      const byMsg2 = await model.findUnique({
+        where: { sourceMessageId: row.sourceMessageId },
+        select: { spellKey: true },
+      });
+      if (byMsg2 && byMsg2.spellKey !== row.spellKey) {
+        await model.delete({ where: { sourceMessageId: row.sourceMessageId } });
+      }
+      await model.upsert({
+        where: { spellKey: row.spellKey },
+        create: row,
+        update: row,
+      });
+    }
+  }
+
+  private async upsertSkillSafe(model: any, row: SkillParsed) {
+    const byMsg = await model.findUnique({
+      where: { sourceMessageId: row.sourceMessageId },
+      select: { skillKey: true },
+    });
+    if (byMsg && byMsg.skillKey !== row.skillKey) {
+      await model.delete({ where: { sourceMessageId: row.sourceMessageId } });
+    }
+
+    try {
+      await model.upsert({
+        where: { skillKey: row.skillKey },
+        create: row,
+        update: row,
+      });
+    } catch (err: any) {
+      if (err?.code !== 'P2002') throw err;
+      const byMsg2 = await model.findUnique({
+        where: { sourceMessageId: row.sourceMessageId },
+        select: { skillKey: true },
+      });
+      if (byMsg2 && byMsg2.skillKey !== row.skillKey) {
+        await model.delete({ where: { sourceMessageId: row.sourceMessageId } });
+      }
+      await model.upsert({
+        where: { skillKey: row.skillKey },
+        create: row,
+        update: row,
+      });
+    }
   }
 
   private async fetchAllMessages(channel: any): Promise<Message[]> {
@@ -261,7 +653,6 @@ export class DiceSearchService {
   private async fetchAllThreads(channel: any): Promise<any[]> {
     const out: any[] = [];
 
-    // 채널 자체가 스레드 ID인 경우
     if (
       channel?.type === ChannelType.PublicThread ||
       channel?.type === ChannelType.PrivateThread ||
@@ -388,6 +779,90 @@ export class DiceSearchService {
     };
   }
 
+  private parseSpellFromMessage(
+    msg: Message,
+    loc: {
+      channelId: string;
+      channelName: string;
+      threadId?: string;
+      threadName?: string;
+    },
+  ): SpellParsed | null {
+    const content = (msg.content ?? '').trim();
+    if (!content) return null;
+
+    const blocks = extractBlocks(content);
+    if (!blocks.length) return null;
+
+    const first = blocks[0];
+    const titleRaw = parseTitleRaw(first.body ?? '');
+    if (!titleRaw) return null;
+
+    const tMatch = titleRaw.match(/^(\d+)\.\s*(.+)$/);
+    const spellNumber = tMatch ? Number.parseInt(tMatch[1], 10) : undefined;
+    const spellName = (tMatch ? tMatch[2] : titleRaw).trim();
+    if (!spellName) return null;
+
+    const bodyRaw = stripFenceBoldWrapper(content.slice(first.end).trim());
+    if (!bodyRaw) return null;
+
+    // 메인 필드 블록(학파/사거리/...) 추정
+    let mainBlockIdx = -1;
+    let mainHit = -1;
+    for (let i = 1; i < blocks.length; i += 1) {
+      const clean = unansi(blocks[i].body ?? '');
+      let hit = 0;
+      for (const label of SPELL_LABELS) {
+        if (clean.includes(`${label}:`)) hit += 1;
+      }
+      if (hit > mainHit) {
+        mainHit = hit;
+        mainBlockIdx = i;
+      }
+    }
+
+    const fields = mainBlockIdx >= 1 ? parseLabeledFields(blocks[mainBlockIdx].body) : {};
+    const extraBlocks = blocks
+      .filter((_, i) => i !== 0 && i !== mainBlockIdx)
+      .map((b) => unansi(b.body).trim())
+      .filter((v) => !!v);
+    const commentText = extraBlocks.length ? extraBlocks.join('\n\n') : undefined;
+
+    const lastEnd = blocks[blocks.length - 1]?.end ?? first.end;
+    const tail = content.slice(lastEnd).trim();
+    const componentsText = parseComponentsFromTail(tail);
+
+    const spellLevel = parseSpellLevelFromChannelName(loc.channelName);
+    const spellKey = `${spellLevel}:${spellNumber ?? normalize(spellName)}`;
+
+    return {
+      spellKey,
+      sourceMessageId: msg.id,
+      sourceMessageUrl: msg.url,
+      sourceChannelId: loc.channelId,
+      sourceChannelName: loc.channelName,
+      sourceThreadId: loc.threadId,
+      sourceThreadName: loc.threadName,
+      spellLevel,
+      spellNumber,
+      spellName,
+      titleRaw,
+      normalizedName: normalize(spellName),
+      school: fields['학파'],
+      rangeText: fields['사거리'],
+      damage: fields['피해'],
+      learnText: fields['습득'],
+      checkText: fields['판정'],
+      concentration: fields['집중'],
+      duration: fields['지속'],
+      castCost: fields['발동 시 소모'],
+      etcText: fields['기타'],
+      commentText,
+      componentsText,
+      bodyRaw,
+    };
+  }
+
   private parseMessageToDoc(
     scope: SearchScope,
     msg: Message,
@@ -408,8 +883,6 @@ export class DiceSearchService {
     const title = parseTitle(first.body ?? '');
     if (!title) return null;
 
-    // 제목 블록 이후의 원문을 그대로 유지한다.
-    // ansi/ini 코드블록, 추가 설명, 키워드(`영창` 등) 라인을 모두 보존한다.
     const body = stripFenceBoldWrapper(content.slice(first.end).trim());
     if (!body) return null;
 
@@ -424,6 +897,60 @@ export class DiceSearchService {
       channelName: loc.channelName,
       threadId: loc.threadId,
       threadName: loc.threadName,
+    };
+  }
+
+  private parseSkillFromMessage(
+    msg: Message,
+    loc: {
+      channelId: string;
+      channelName: string;
+      threadId?: string;
+      threadName?: string;
+    },
+  ): SkillParsed | null {
+    const content = (msg.content ?? '').trim();
+    if (!content) return null;
+
+    const blocks = extractBlocks(content);
+    if (!blocks.length) return null;
+
+    const first = blocks[0];
+    const titleRaw = parseTitleRaw(first.body ?? '');
+    if (!titleRaw) return null;
+
+    const idx = titleRaw.indexOf('(');
+    const skillName =
+      (idx >= 0 ? titleRaw.slice(0, idx) : titleRaw).trim() || titleRaw.trim();
+    if (!skillName) return null;
+    const conditionText = idx >= 0 ? titleRaw.slice(idx).trim() : undefined;
+
+    const bodyRaw = stripFenceBoldWrapper(content.slice(first.end).trim());
+    if (!bodyRaw) return null;
+
+    const threadName = (loc.threadName ?? '').trim();
+    const jobFromChannel = parseJobFromChannelName(loc.channelName);
+    const jobFromThread = threadName
+      ? threadName.replace(/^기술[-_\s]*/, '').trim()
+      : undefined;
+    const jobName =
+      jobFromChannel || jobFromThread || threadName || loc.channelName || 'unknown';
+    const skillKey = `${normalize(jobName)}:${normalize(skillName)}`;
+
+    return {
+      skillKey,
+      sourceMessageId: msg.id,
+      sourceMessageUrl: msg.url,
+      sourceChannelId: loc.channelId,
+      sourceChannelName: loc.channelName,
+      sourceThreadId: loc.threadId,
+      sourceThreadName: loc.threadName,
+      jobName,
+      skillName,
+      conditionText,
+      titleRaw,
+      normalizedName: normalize(skillName),
+      bodyRaw,
     };
   }
 }

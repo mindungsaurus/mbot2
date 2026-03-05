@@ -51,6 +51,64 @@ function chunkText(text: string, maxLen: number): string[] {
   return out.length ? out : [''];
 }
 
+function splitLongFenceBlock(block: string, maxLen: number): string[] {
+  const m = block.match(/^```([^\n]*)\n([\s\S]*?)```$/);
+  if (!m) return chunkText(block, maxLen);
+
+  const lang = m[1] ?? '';
+  const body = m[2] ?? '';
+  const open = `\`\`\`${lang}\n`;
+  const close = `\n\`\`\``;
+  const maxBodyLen = Math.max(1, maxLen - open.length - close.length);
+
+  const parts = chunkText(body, maxBodyLen);
+  return parts.map((p) => `${open}${p}${close}`);
+}
+
+function splitBodyPreservingFences(text: string, maxLen: number): string[] {
+  if (!text) return [];
+
+  const segments: string[] = [];
+  const re = /```[a-zA-Z0-9_-]*\n?[\s\S]*?```/g;
+  let last = 0;
+  let m: RegExpExecArray | null = null;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) segments.push(text.slice(last, m.index));
+    segments.push(m[0]);
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) segments.push(text.slice(last));
+
+  const flattened: string[] = [];
+  for (const seg of segments) {
+    if (!seg) continue;
+    if (seg.startsWith('```') && seg.endsWith('```')) {
+      if (seg.length <= maxLen) flattened.push(seg);
+      else flattened.push(...splitLongFenceBlock(seg, maxLen));
+    } else {
+      if (seg.length <= maxLen) flattened.push(seg);
+      else flattened.push(...chunkText(seg, maxLen));
+    }
+  }
+
+  const out: string[] = [];
+  let cur = '';
+  for (const seg of flattened) {
+    if (!cur) {
+      cur = seg;
+      continue;
+    }
+    if (cur.length + seg.length <= maxLen) {
+      cur += seg;
+      continue;
+    }
+    out.push(cur);
+    cur = seg;
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
 @Injectable()
 export class DiceCommands {
   constructor(
@@ -373,40 +431,27 @@ export class DiceCommands {
       }
 
       const doc = match.doc;
-      const lang = scope === 'spell' ? 'ini' : 'cs';
+      const header = `${doc.messageUrl}\n\n**\`\`\`\n${doc.title}\n\`\`\`**\n`;
+      const bodyChunks = splitBodyPreservingFences(doc.body ?? '', DISCORD_MSG_LIMIT);
 
-      const head =
-        `${doc.messageUrl}\n\n` + `**\`\`\`\n${doc.title}\n\`\`\`**\n`;
-      const codeOpen = `\`\`\`${lang}\n`;
-      const codeClose = `\n\`\`\``;
+      const messages: string[] = [];
+      let firstMsg = header;
 
-      const firstBodyMax = Math.max(
-        1,
-        DISCORD_MSG_LIMIT - head.length - codeOpen.length - codeClose.length,
-      );
-      const nextBodyMax = Math.max(
-        1,
-        DISCORD_MSG_LIMIT - `(계속 99)\n`.length - codeOpen.length - codeClose.length,
-      );
+      if (bodyChunks.length > 0) {
+        const candidate = `${firstMsg}${bodyChunks[0]}`;
+        if (candidate.length <= DISCORD_MSG_LIMIT) {
+          firstMsg = candidate;
+          bodyChunks.shift();
+        }
+      }
 
-      const chunks = chunkText(doc.body ?? '', nextBodyMax);
-      const first = chunks[0] ?? '';
-      const rest = chunks.slice(1);
+      messages.push(firstMsg);
+      messages.push(...bodyChunks);
 
-      await interaction.editReply({
-        content: `${head}${codeOpen}${first.slice(0, firstBodyMax)}${codeClose}`,
-      });
-
-      // 첫 청크가 firstBodyMax를 넘긴 경우 남은 부분을 별도 청크로 다시 추가
-      const firstRemainder =
-        first.length > firstBodyMax ? [first.slice(firstBodyMax)] : [];
-      const followChunks = [...firstRemainder, ...rest];
-
-      for (let i = 0; i < followChunks.length; i += 1) {
-        const idx = i + 2; // 본문 파트 번호 (첫 메시지가 1)
-        const c = followChunks[i] ?? '';
+      await interaction.editReply({ content: messages[0] });
+      for (let i = 1; i < messages.length; i += 1) {
         await interaction.followUp({
-          content: `(계속 ${idx})\n${codeOpen}${c}${codeClose}`,
+          content: messages[i],
         });
       }
       return;

@@ -59,12 +59,21 @@ function normalize(s: string): string {
   return s.toLowerCase().replace(/\s+/g, '');
 }
 
-function extractBlocks(content: string): Array<{ lang: string; body: string }> {
-  const out: Array<{ lang: string; body: string }> = [];
+function extractBlocks(
+  content: string,
+): Array<{ lang: string; body: string; start: number; end: number }> {
+  const out: Array<{ lang: string; body: string; start: number; end: number }> = [];
   const re = /```([a-zA-Z0-9_-]*)\n?([\s\S]*?)```/g;
   let m: RegExpExecArray | null = null;
   while ((m = re.exec(content)) !== null) {
-    out.push({ lang: (m[1] ?? '').trim(), body: (m[2] ?? '').trim() });
+    const start = m.index;
+    const end = m.index + m[0].length;
+    out.push({
+      lang: (m[1] ?? '').trim(),
+      body: (m[2] ?? '').trim(),
+      start,
+      end,
+    });
   }
   return out;
 }
@@ -72,6 +81,17 @@ function extractBlocks(content: string): Array<{ lang: string; body: string }> {
 function parseTitle(raw: string): string {
   const oneLine = raw.trim().split('\n')[0]?.trim() ?? '';
   return oneLine.replace(/^\d+\.\s*/, '').trim();
+}
+
+function stripFenceBoldWrapper(text: string): string {
+  // 코드블록만 감싸는 굵게 래퍼(**)는 렌더 시 불필요하게 노출되므로 제거
+  // 예: "**\n```ansi ... ```\n**" 또는 줄 중간의 "\n**\n```"
+  let s = text;
+  s = s.replace(/^\*\*\s*\n(?=```)/, '');
+  s = s.replace(/\n\*\*\s*\n(?=```)/g, '\n');
+  s = s.replace(/(?<=```)\s*\n\*\*$/g, '');
+  s = s.replace(/(?<=```)\s*\n\*\*\s*\n/g, '\n');
+  return s.trim();
 }
 
 function scoreTitle(docTitle: string, keyword: string): number {
@@ -384,10 +404,13 @@ export class DiceSearchService {
     const blocks = extractBlocks(content);
     if (!blocks.length) return null;
 
-    const title = parseTitle(blocks[0].body ?? '');
+    const first = blocks[0];
+    const title = parseTitle(first.body ?? '');
     if (!title) return null;
 
-    const body = (blocks[1]?.body ?? content).trim();
+    // 제목 블록 이후의 원문을 그대로 유지한다.
+    // ansi/ini 코드블록, 추가 설명, 키워드(`영창` 등) 라인을 모두 보존한다.
+    const body = stripFenceBoldWrapper(content.slice(first.end).trim());
     if (!body) return null;
 
     return {

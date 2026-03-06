@@ -6,7 +6,7 @@ import {
   getComputedIntegrity,
   getDisplayTags,
 } from './encounter.compute';
-import { buildFormationLines } from './encounter.formation';
+import { buildDistanceMarkLines, buildFormationLines } from './encounter.formation';
 
 const RESET = '\x1b[0m';
 const GRAY = '\x1b[0;37m';
@@ -276,6 +276,10 @@ function fmtAc(u: Unit) {
   return `AC.${base}(${ds})`;
 }
 
+function tintDistanceIndex(line: string): string {
+  return line.replace(/\[\d+\]:/g, (m) => `${GROUP_MEMBERS_GRAY}${m}${RESET}${color(39)}`);
+}
+
 export function renderAnsi(
   state: EncounterState,
   opts?: RenderOptions,
@@ -355,6 +359,14 @@ export function renderAnsi(
 
   if (formation.length === 0) lines.push(`${color(39)}-${RESET}`);
   else for (const f of formation) lines.push(`${color(39)}${f}${RESET}`);
+
+  lines.push('');
+  lines.push(`${color(36)}Distance Marks${RESET}`);
+  const distanceMarks = buildDistanceMarkLines(state, {
+    formatUnitLabel: (u, label) => `${unitColor(u)}${label}${color(39)}`,
+  });
+  if (distanceMarks.length === 0) lines.push(`${color(39)}-${RESET}`);
+  else for (const d of distanceMarks) lines.push(`${color(39)}${tintDistanceIndex(d)}${RESET}`);
 
   return lines.join('\n');
 }

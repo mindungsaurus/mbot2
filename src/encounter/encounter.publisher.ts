@@ -34,6 +34,13 @@ function chunkByLines(s: string, maxLen: number): string[] {
   let cur = '';
 
   for (const line of lines) {
+    // Turn 섹션은 항상 새 메시지에서 시작하도록 강제 분할
+    if (line.includes('Turn (Round')) {
+      if (cur) out.push(cur);
+      cur = line;
+      continue;
+    }
+
     const next = cur ? `${cur}\n${line}` : line;
     if (next.length > maxLen) {
       if (cur) out.push(cur);

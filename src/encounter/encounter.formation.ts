@@ -216,6 +216,60 @@ export function buildFormationLines(
   return lines;
 }
 
+export function buildDistanceMarkLines(
+  state: EncounterState,
+  opts?: {
+    formatUnitLabel?: (unit: Unit, baseLabel: string) => string;
+    formatFloorLabel?: (z: number) => string;
+  },
+): string[] {
+  const byZ = new Map<number, Map<number, UnitEntry[]>>();
+
+  function getCell(z: number, x: number) {
+    const row = byZ.get(z) ?? new Map<number, UnitEntry[]>();
+    if (!byZ.has(z)) byZ.set(z, row);
+    const cell = row.get(x) ?? [];
+    if (!row.has(x)) row.set(x, cell);
+    return cell;
+  }
+
+  // 숨겨짐/벤치 유닛은 제외
+  for (const u of state.units ?? []) {
+    if (u.hidden) continue;
+    if ((u as any).bench) continue;
+    if (!u.pos) continue;
+    const baseLabel = (u.alias ?? '').trim() || u.name;
+    getCell(u.pos.z, u.pos.x).push({ unit: u, label: baseLabel });
+  }
+
+  const zs = Array.from(byZ.keys()).sort((a, b) => a - b);
+  const showFloor = zs.length > 1;
+  const lines: string[] = [];
+
+  for (const z of zs) {
+    const row = byZ.get(z)!;
+    const xs = Array.from(row.keys()).sort((a, b) => a - b);
+    if (!xs.length) continue;
+
+    const leftMostX = xs[0];
+    for (const x of xs) {
+      const units = row.get(x) ?? [];
+      const labels = collapseUnitLabels(units, opts?.formatUnitLabel).filter(Boolean);
+      if (!labels.length) continue;
+
+      const index = Math.max(1, Math.floor(Math.abs(x - leftMostX)) + 1);
+      const indexLabel = `[${String(index).padStart(2, '0')}]`;
+      const prefix = showFloor
+        ? `(${opts?.formatFloorLabel ? opts.formatFloorLabel(z) : formatFloorLabel(z)}) `
+        : '';
+
+      lines.push(`${prefix}${indexLabel}: ${labels.join(', ')}`);
+    }
+  }
+
+  return lines;
+}
+
 function formatFloorLabel(z: number): string {
   if (z >= 0) return `${z + 1}F`;
   return `B${Math.abs(z)}`;

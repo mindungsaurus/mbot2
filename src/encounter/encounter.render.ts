@@ -36,6 +36,7 @@ type RenderOptions = {
   hideBench?: boolean;
   hideBenchTeam?: boolean;
   hideBenchEnemy?: boolean;
+  planarMode?: boolean;
 };
 
 function unitColor(u: Unit) {
@@ -277,7 +278,7 @@ function fmtAc(u: Unit) {
 }
 
 function tintDistanceIndex(line: string): string {
-  return line.replace(/\[\d+\]:/g, (m) => `${GROUP_MEMBERS_GRAY}${m}${RESET}${color(39)}`);
+  return line.replace(/(?:\[\d+\])+:/g, (m) => `${GROUP_MEMBERS_GRAY}${m}${RESET}${color(39)}`);
 }
 
 export function renderAnsi(
@@ -288,6 +289,7 @@ export function renderAnsi(
   const hideBench = !!opts?.hideBench;
   const hideBenchTeam = hideBench || !!opts?.hideBenchTeam;
   const hideBenchEnemy = hideBench || !!opts?.hideBenchEnemy;
+  const planarMode = !!opts?.planarMode;
   // Active units render in main sections; bench units are listed separately unless hidden.
   const activeUnits = (state.units ?? []).filter((u) => !(u as any).bench);
   const team = activeUnits.filter((u) => u.side === 'TEAM');
@@ -352,18 +354,22 @@ export function renderAnsi(
   lines.push(`${color(38)}${renderTurnLine(state)}${RESET}`);
   lines.push('');
 
-  lines.push(`${color(39)}Formation${RESET}`);
-  const formation = buildFormationLines(state, {
-    formatUnitLabel: (u, label) => `${unitColor(u)}${label}${color(39)}`,
-  });
+  if (!planarMode) {
+    lines.push(`${color(39)}Formation${RESET}`);
+    const formation = buildFormationLines(state, {
+      formatUnitLabel: (u, label) => `${unitColor(u)}${label}${color(39)}`,
+    });
 
-  if (formation.length === 0) lines.push(`${color(39)}-${RESET}`);
-  else for (const f of formation) lines.push(`${color(39)}${f}${RESET}`);
+    if (formation.length === 0) lines.push(`${color(39)}-${RESET}`);
+    else for (const f of formation) lines.push(`${color(39)}${f}${RESET}`);
 
-  lines.push('');
+    lines.push('');
+  }
+
   lines.push(`${color(36)}Distance Marks${RESET}`);
   const distanceMarks = buildDistanceMarkLines(state, {
     formatUnitLabel: (u, label) => `${unitColor(u)}${label}${color(39)}`,
+    planarMode,
   });
   if (distanceMarks.length === 0) lines.push(`${color(39)}-${RESET}`);
   else for (const d of distanceMarks) lines.push(`${color(39)}${tintDistanceIndex(d)}${RESET}`);

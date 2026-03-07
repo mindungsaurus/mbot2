@@ -44,6 +44,8 @@ export class EncounterService {
       id,
       units: [],
       markers: [],
+      blockedCells: [],
+      gridLabels: { x: {}, z: {} },
       turnOrder: [],
       turnIndex: 0,
       turnEndSnapshots: {},
@@ -191,7 +193,12 @@ export class EncounterService {
 
   render(
     idState: EncounterState,
-    opts?: { hideBench?: boolean; hideBenchTeam?: boolean; hideBenchEnemy?: boolean },
+    opts?: {
+      hideBench?: boolean;
+      hideBenchTeam?: boolean;
+      hideBenchEnemy?: boolean;
+      planarMode?: boolean;
+    },
     tagColors?: Record<string, number>,
   ): string {
     return renderAnsi(idState, opts, tagColors);
@@ -200,7 +207,12 @@ export class EncounterService {
   async renderForUser(
     userId: string,
     idState: EncounterState,
-    opts?: { hideBench?: boolean; hideBenchTeam?: boolean; hideBenchEnemy?: boolean },
+    opts?: {
+      hideBench?: boolean;
+      hideBenchTeam?: boolean;
+      hideBenchEnemy?: boolean;
+      planarMode?: boolean;
+    },
   ): Promise<string> {
     const tagColors = await this.getTagPresetColorMap(userId);
     return renderAnsi(idState, opts, tagColors);
@@ -247,6 +259,58 @@ export class EncounterService {
     if (!Array.isArray((next as any).markers)) {
       (next as any).markers = [];
       changed = true;
+    }
+
+    // blockedCells 기본값 + 정규화
+    if (!Array.isArray((next as any).blockedCells)) {
+      (next as any).blockedCells = [];
+      changed = true;
+    } else {
+      const seen = new Set<string>();
+      const normalized: Array<{ x: number; z: number }> = [];
+      for (const raw of (next as any).blockedCells as any[]) {
+        if (!raw) continue;
+        const x = Math.floor(Number((raw as any).x));
+        const z = Math.floor(Number((raw as any).z));
+        if (!Number.isFinite(x) || !Number.isFinite(z)) continue;
+        const key = `${x},${z}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        normalized.push({ x, z });
+      }
+      if (normalized.length !== (next as any).blockedCells.length) {
+        (next as any).blockedCells = normalized;
+        changed = true;
+      }
+    }
+
+    // gridLabels 기본값 + 정규화
+    const normalizeGridLabelMap = (raw: any): Record<string, string> => {
+      const out: Record<string, string> = {};
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+      for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+        const keyNum = Math.floor(Number(k));
+        if (!Number.isFinite(keyNum)) continue;
+        const label = String(v ?? '').trim();
+        if (!label) continue;
+        out[String(keyNum)] = label;
+      }
+      return out;
+    };
+
+    const rawGridLabels = (next as any).gridLabels;
+    if (!rawGridLabels || typeof rawGridLabels !== 'object' || Array.isArray(rawGridLabels)) {
+      (next as any).gridLabels = { x: {}, z: {} };
+      changed = true;
+    } else {
+      const normalizedX = normalizeGridLabelMap((rawGridLabels as any).x);
+      const normalizedZ = normalizeGridLabelMap((rawGridLabels as any).z);
+      const prevX = (rawGridLabels as any).x ?? {};
+      const prevZ = (rawGridLabels as any).z ?? {};
+      const sameX = JSON.stringify(prevX) === JSON.stringify(normalizedX);
+      const sameZ = JSON.stringify(prevZ) === JSON.stringify(normalizedZ);
+      if (!sameX || !sameZ) changed = true;
+      (next as any).gridLabels = { x: normalizedX, z: normalizedZ };
     }
 
     // battleStarted 기본값

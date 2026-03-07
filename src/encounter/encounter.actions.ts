@@ -206,6 +206,83 @@ function normalizeMarkerCells(cells: any): Pos[] | undefined {
   return out.length ? out : undefined;
 }
 
+function keyPos(x: number, z: number): string {
+  return `${x},${z}`;
+}
+
+function getBlockedCellSet(state: EncounterState): Set<string> {
+  const set = new Set<string>();
+  const cells = Array.isArray((state as any).blockedCells)
+    ? ((state as any).blockedCells as Array<{ x: number; z: number }>)
+    : [];
+  for (const c of cells) {
+    if (!c) continue;
+    set.add(keyPos(normPos((c as any).x), normPos((c as any).z)));
+  }
+  return set;
+}
+
+function isBlockedCell(state: EncounterState, x: number, z: number): boolean {
+  return getBlockedCellSet(state).has(keyPos(normPos(x), normPos(z)));
+}
+
+function findNearestOpenCell(
+  state: EncounterState,
+  startX: number,
+  startZ: number,
+  reserved = new Set<string>(),
+): Pos | null {
+  const blocked = getBlockedCellSet(state);
+  const startKey = keyPos(startX, startZ);
+  if (!blocked.has(startKey) && !reserved.has(startKey)) {
+    return { x: startX, z: startZ };
+  }
+
+  const q: Array<{ x: number; z: number }> = [{ x: startX, z: startZ }];
+  const seen = new Set<string>([startKey]);
+  const dirs = [
+    { dx: 1, dz: 0 },
+    { dx: -1, dz: 0 },
+    { dx: 0, dz: 1 },
+    { dx: 0, dz: -1 },
+  ];
+
+  while (q.length > 0) {
+    const cur = q.shift()!;
+    for (const d of dirs) {
+      const nx = normPos(cur.x + d.dx);
+      const nz = normPos(cur.z + d.dz);
+      const k = keyPos(nx, nz);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      if (!blocked.has(k) && !reserved.has(k)) return { x: nx, z: nz };
+      q.push({ x: nx, z: nz });
+    }
+  }
+
+  return null;
+}
+
+function findAdjacentOpenCell(
+  state: EncounterState,
+  x: number,
+  z: number,
+): Pos | null {
+  const blocked = getBlockedCellSet(state);
+  const dirs = [
+    { dx: 1, dz: 0 },
+    { dx: -1, dz: 0 },
+    { dx: 0, dz: 1 },
+    { dx: 0, dz: -1 },
+  ];
+  for (const d of dirs) {
+    const nx = normPos(x + d.dx);
+    const nz = normPos(z + d.dz);
+    if (!blocked.has(keyPos(nx, nz))) return { x: nx, z: nz };
+  }
+  return null;
+}
+
 export function applyAction(
   state: EncounterState,
   action: Action,
@@ -1186,8 +1263,16 @@ export function applyActionInPlace(
 
       const before = u.pos ? { ...u.pos } : { x: 0, z: 0 };
 
-      const x = normPos(action.x);
-      const z = normPos(action.z);
+      const requestedX = normPos(action.x);
+      const requestedZ = normPos(action.z);
+      const spawnPos =
+        findNearestOpenCell(state, requestedX, requestedZ) ?? {
+          x: requestedX,
+          z: requestedZ,
+        };
+      const x = spawnPos.x;
+      const z = spawnPos.z;
+      if (isBlockedCell(state, x, z)) return;
       u.pos = { x, z };
 
       const after = u.pos;
@@ -1214,7 +1299,10 @@ export function applyActionInPlace(
 
       const before = u.pos ? { ...u.pos } : { x: 0, z: 0 };
       const cur = u.pos ?? { x: 0, z: 0 };
-      u.pos = { x: normPos(cur.x + dx), z: normPos(cur.z + dz) };
+      const nextX = normPos(cur.x + dx);
+      const nextZ = normPos(cur.z + dz);
+      if (isBlockedCell(state, nextX, nextZ)) return;
+      u.pos = { x: nextX, z: nextZ };
 
       const after = u.pos;
       if (before.x !== after.x || before.z !== after.z) {
@@ -1226,6 +1314,78 @@ export function applyActionInPlace(
           action,
           ctx,
         );
+      }
+      return;
+    }
+
+    case 'TOGGLE_BLOCKED_CELL': {
+      const ctx = makeLogCtx(state);
+      const x = normPos(action.x);
+      const z = normPos(action.z);
+
+      state.blockedCells ??= [];
+      const idx = state.blockedCells.findIndex(
+        (p) => normPos((p as any).x) === x && normPos((p as any).z) === z,
+      );
+      const beforeBlocked = idx >= 0;
+      const afterBlocked =
+        action.blocked !== undefined ? !!action.blocked : !beforeBlocked;
+      if (beforeBlocked === afterBlocked) return;
+
+      if (afterBlocked) {
+        state.blockedCells.push({ x, z });
+
+        const occupants = (state.units ?? []).filter(
+          (u) => !!u.pos && normPos(u.pos!.x) === x && normPos(u.pos!.z) === z,
+        );
+        const movedLines: string[] = [];
+        for (const u of occupants) {
+          if (!u.pos) continue;
+          const nextPos =
+            findAdjacentOpenCell(state, x, z) ?? findNearestOpenCell(state, x, z);
+          if (!nextPos) continue;
+          const before = { ...u.pos };
+          u.pos = { x: nextPos.x, z: nextPos.z };
+          movedLines.push(
+            `${unitLabel(state, u.id)} ${fmtPos(before)} → ${fmtPos(nextPos)}`,
+          );
+        }
+
+        let line = `지형 비활성화: ${fmtPos({ x, z })}.`;
+        if (movedLines.length > 0) {
+          line += ` 밀어내기: ${movedLines.join(', ')}.`;
+        }
+        pushLog(state, 'ACTION', line, action, ctx);
+      } else {
+        state.blockedCells = state.blockedCells.filter(
+          (p) => !(normPos((p as any).x) === x && normPos((p as any).z) === z),
+        );
+        pushLog(
+          state,
+          'ACTION',
+          `지형 활성화: ${fmtPos({ x, z })}.`,
+          action,
+          ctx,
+        );
+      }
+      return;
+    }
+
+    case 'SET_GRID_LABEL': {
+      const axis = action.axis === 'z' ? 'z' : 'x';
+      const index = normPos(action.index);
+      const key = String(index);
+      const label = String(action.label ?? '').trim();
+
+      state.gridLabels ??= { x: {}, z: {} };
+      state.gridLabels.x ??= {};
+      state.gridLabels.z ??= {};
+      const map = axis === 'x' ? state.gridLabels.x : state.gridLabels.z;
+
+      if (!label) {
+        delete map[key];
+      } else {
+        map[key] = label;
       }
       return;
     }

@@ -259,10 +259,6 @@ export class DiceCommands {
         });
       }
 
-      if (this.diceSearchService.getSyncedAt() === 0) {
-        await this.diceSearchService.syncAll();
-      }
-
       const names = await this.diceSearchService.searchSpellNamesByCategory(
         level,
         school,
@@ -508,10 +504,6 @@ export class DiceCommands {
             true,
           ),
         });
-      }
-
-      if (this.diceSearchService.getSyncedAt() === 0) {
-        await this.diceSearchService.syncAll();
       }
 
       let match = null as Awaited<

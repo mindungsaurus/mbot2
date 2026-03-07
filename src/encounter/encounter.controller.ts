@@ -10,7 +10,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import type { Action } from './encounter.types';
+import type { Action, EncounterState } from './encounter.types';
 import { EncounterService } from './encounter.service';
 import { EncounterPublisher } from './encounter.publisher';
 import { AuthGuard } from '../auth/auth.guard';
@@ -21,7 +21,10 @@ type PublishBody = {
   hideBench?: boolean;
   hideBenchTeam?: boolean;
   hideBenchEnemy?: boolean;
+  planarMode?: boolean;
 };
+
+type PublishRenderState = Pick<EncounterState, 'units' | 'markers' | 'blockedCells' | 'gridLabels' | 'turnOrder' | 'turnIndex' | 'round' | 'battleStarted' | 'tempTurnStack' | 'turnGroups'>;
 
 type CreateEncounterBody = {
   name?: string;
@@ -85,13 +88,32 @@ export class EncounterController {
     const hideBench = !!body?.hideBench;
     const hideBenchTeam = hideBench || !!body?.hideBenchTeam;
     const hideBenchEnemy = hideBench || !!body?.hideBenchEnemy;
+    const planarMode = !!body?.planarMode;
     const ansi = await this.encounter.renderForUser(req.user.id, state, {
       hideBench,
       hideBenchTeam,
       hideBenchEnemy,
+      planarMode,
     });
 
-    await this.publisher.sendAnsiToChannel(channelId, ansi); // ????�� ??메시지
+    const publishState: PublishRenderState = {
+      units: state.units,
+      markers: state.markers,
+      blockedCells: (state as any).blockedCells,
+      gridLabels: (state as any).gridLabels,
+      turnOrder: state.turnOrder,
+      turnIndex: state.turnIndex,
+      round: state.round,
+      battleStarted: state.battleStarted,
+      tempTurnStack: state.tempTurnStack,
+      turnGroups: state.turnGroups,
+    };
+
+    await this.publisher.sendAnsiToChannel(
+      channelId,
+      ansi,
+      planarMode ? publishState : undefined,
+    ); // ????�� ??메시지
     return { ok: true, channelId };
   }
 

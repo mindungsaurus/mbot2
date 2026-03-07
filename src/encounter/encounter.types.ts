@@ -116,6 +116,11 @@ export interface EncounterState {
   id: string;
   units: Unit[];
   markers?: Marker[];
+  blockedCells?: Pos[];
+  gridLabels?: {
+    x?: Record<string, string>;
+    z?: Record<string, string>;
+  };
   sideNotes?: Partial<Record<Side, string>>;
   turnOrder: TurnEntry[];
   turnGroups?: TurnGroup[];
@@ -280,6 +285,8 @@ export type Action =
     }
   | { type: 'SET_UNIT_POS'; unitId: string; x: number; z: number }
   | { type: 'MOVE_UNIT'; unitId: string; dx?: number; dz?: number }
+  | { type: 'TOGGLE_BLOCKED_CELL'; x: number; z: number; blocked?: boolean }
+  | { type: 'SET_GRID_LABEL'; axis: 'x' | 'z'; index: number; label?: string | null }
   | {
       type: 'UPSERT_MARKER';
       markerId: string;

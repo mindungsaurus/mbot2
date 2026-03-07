@@ -221,6 +221,7 @@ export function buildDistanceMarkLines(
   opts?: {
     formatUnitLabel?: (unit: Unit, baseLabel: string) => string;
     formatFloorLabel?: (z: number) => string;
+    planarMode?: boolean;
   },
 ): string[] {
   const byZ = new Map<number, Map<number, UnitEntry[]>>();
@@ -243,8 +244,38 @@ export function buildDistanceMarkLines(
   }
 
   const zs = Array.from(byZ.keys()).sort((a, b) => a - b);
-  const showFloor = zs.length > 1;
   const lines: string[] = [];
+  const planarMode = !!opts?.planarMode;
+
+  if (planarMode) {
+    const allXs: number[] = [];
+    for (const row of byZ.values()) {
+      for (const x of row.keys()) allXs.push(x);
+    }
+    if (!allXs.length) return lines;
+
+    const minX = Math.min(...allXs);
+    const zIndex = new Map<number, number>();
+    zs.forEach((z, idx) => zIndex.set(z, idx + 1));
+
+    for (const z of zs) {
+      const row = byZ.get(z)!;
+      const xs = Array.from(row.keys()).sort((a, b) => a - b);
+      for (const x of xs) {
+        const units = row.get(x) ?? [];
+        const labels = collapseUnitLabels(units, opts?.formatUnitLabel).filter(Boolean);
+        if (!labels.length) continue;
+
+        const ix = Math.max(1, Math.floor(x - minX) + 1);
+        const iy = zIndex.get(z) ?? 1;
+        const indexLabel = `[${String(ix).padStart(2, '0')}][${String(iy).padStart(2, '0')}]`;
+        lines.push(`${indexLabel}: ${labels.join(', ')}`);
+      }
+    }
+    return lines;
+  }
+
+  const showFloor = zs.length > 1;
 
   for (const z of zs) {
     const row = byZ.get(z)!;

@@ -28,9 +28,6 @@ WORKDIR /app
 
 COPY nest-cli.json tsconfig*.json ./
 COPY src ./src
-COPY test ./test
-COPY generated ./generated
-COPY data ./data
 
 RUN npm run build
 
@@ -64,8 +61,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY package*.json ./
 COPY prisma ./prisma
 COPY --from=build /app/dist ./dist
-COPY --from=build /app/generated ./generated
-COPY --from=build /app/data ./data
+RUN mkdir -p /app/data
 
 EXPOSE 3000
 CMD ["sh", "-c", "npx prisma generate && node dist/main"]

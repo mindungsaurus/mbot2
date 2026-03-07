@@ -24,7 +24,7 @@ type PublishRenderState = Pick<
 >;
 
 const GRID_FONT_FAMILY =
-  '"Malgun Gothic","맑은 고딕","Noto Sans KR","Apple SD Gothic Neo","Segoe UI","Nanum Gothic","Arial Unicode MS",sans-serif';
+  '"Noto Sans CJK KR","Noto Sans KR","Noto Sans","Nanum Gothic","Malgun Gothic","맑은 고딕","DejaVu Sans","Arial Unicode MS","Noto Color Emoji",sans-serif';
 
 const IDENTIFIER_SYMBOLS = [
   'ㄱ',

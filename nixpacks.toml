@@ -7,6 +7,7 @@ aptPkgs = [
   "librsvg2-dev",
   "libfontconfig1",
   "fontconfig",
+  "fontconfig-config",
   "fonts-dejavu-core",
   "fonts-noto-core",
   "fonts-noto-cjk",
@@ -26,4 +27,4 @@ cmds = [
 ]
 
 [start]
-cmd = "npx prisma generate && node dist/main"
+cmd = "export FONTCONFIG_PATH=/etc/fonts FONTCONFIG_FILE=/etc/fonts/fonts.conf && npx prisma generate && node dist/main"

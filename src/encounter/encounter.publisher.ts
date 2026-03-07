@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import { createCanvas } from 'canvas';
+import { existsSync } from 'node:fs';
+import { createCanvas, registerFont } from 'canvas';
 import type { CanvasRenderingContext2D } from 'canvas';
 import {
   AttachmentBuilder,
@@ -22,6 +23,54 @@ type PublishRenderState = Pick<
   | 'tempTurnStack'
   | 'turnGroups'
 >;
+
+const GRID_FONT_REGISTRATION_TARGETS: ReadonlyArray<{
+  path: string;
+  family: string;
+}> = [
+  {
+    path: '/usr/share/fonts/truetype/nanum/NanumGothic.ttf',
+    family: 'Nanum Gothic',
+  },
+  {
+    path: '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc',
+    family: 'Noto Sans CJK KR',
+  },
+  {
+    path: '/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc',
+    family: 'Noto Sans CJK KR',
+  },
+  {
+    path: '/usr/share/fonts/truetype/noto/NotoSansKR-Regular.otf',
+    family: 'Noto Sans KR',
+  },
+  {
+    path: '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
+    family: 'DejaVu Sans',
+  },
+];
+
+let canvasFontReady = false;
+
+function ensureCanvasFontRuntimeReady() {
+  if (canvasFontReady) return;
+
+  if (!process.env.FONTCONFIG_PATH) process.env.FONTCONFIG_PATH = '/etc/fonts';
+  if (!process.env.FONTCONFIG_FILE) {
+    process.env.FONTCONFIG_FILE = '/etc/fonts/fonts.conf';
+  }
+
+  for (const target of GRID_FONT_REGISTRATION_TARGETS) {
+    try {
+      if (!existsSync(target.path)) continue;
+      registerFont(target.path, { family: target.family });
+    } catch {
+      // fallback fonts will be used if registration fails
+    }
+  }
+
+  canvasFontReady = true;
+}
 
 const GRID_FONT_FAMILY =
   '"Noto Sans CJK KR","Noto Sans KR","Noto Sans","Nanum Gothic","Malgun Gothic","맑은 고딕","DejaVu Sans","Arial Unicode MS","Noto Color Emoji",sans-serif';
@@ -141,6 +190,8 @@ function getUnitLabel(u: Unit): string {
 function renderBattleGridAttachment(
   state: PublishRenderState,
 ): AttachmentBuilder | null {
+  ensureCanvasFontRuntimeReady();
+
   const visibleUnits = (state.units ?? []).filter(
     (u) => !u.hidden && !(u as any).bench && !!u.pos,
   );

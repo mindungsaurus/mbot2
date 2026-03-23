@@ -11,6 +11,7 @@ import { EncounterModule } from './encounter/encounter.module';
 import { AuthModule } from './auth/auth.module';
 import { UnitPresetsModule } from './unit-presets/unit-presets.module';
 import { TagPresetsModule } from './tag-presets/tag-presets.module';
+import { WorldMapsModule } from './world-maps/world-maps.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { TagPresetsModule } from './tag-presets/tag-presets.module';
     EncounterModule,
     UnitPresetsModule,
     TagPresetsModule,
+    WorldMapsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

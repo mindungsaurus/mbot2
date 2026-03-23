@@ -60,6 +60,7 @@ model User {
   unitPresets        UnitPreset[]
   tagPresetFolders  TagPresetFolder[]
   tagPresets         TagPreset[]
+  worldMaps          WorldMap[]
 }
 
 model UserSession {
@@ -220,3 +221,85 @@ model SkillEntry {
   @@index([normalizedName])
   @@index([jobName])
 }
+
+model WorldMap {
+  id                   String   @id @default(uuid())
+  ownerId              String
+  name                 String
+  imageUrl             String?
+  imageWidth           Int?
+  imageHeight          Int?
+  hexSize              Float
+  originX              Float
+  originY              Float
+  cols                 Int
+  rows                 Int
+  orientation          String
+  cityGlobal           Json
+  tileStatePresets     Json?
+  tileStateAssignments Json?
+  tileRegionStates     Json?
+  buildingPresets      Json?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  owner                User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  buildingPresetRows   WorldMapBuildingPreset[]
+  buildingInstances    WorldMapBuildingInstance[]
+  tickLogs             WorldMapTickLog[]
+
+  @@index([ownerId])
+}
+
+model WorldMapBuildingPreset {
+  id             String   @id @default(cuid())
+  mapId          String
+  name           String
+  color          String
+  tier           String?
+  effort         Int?
+  space          Int?
+  description    String?
+  placementRules Json?
+  buildCost      Json?
+  researchCost   Json?
+  upkeep         Json?
+  effects        Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  map            WorldMap @relation(fields: [mapId], references: [id], onDelete: Cascade)
+  instances      WorldMapBuildingInstance[]
+
+  @@index([mapId])
+  @@index([mapId, name])
+}
+
+model WorldMapBuildingInstance {
+  id             String                 @id @default(cuid())
+  mapId          String
+  presetId       String
+  col            Int
+  row            Int
+  enabled        Boolean                @default(true)
+  progressEffort Int                    @default(0)
+  meta           Json?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+  map            WorldMap               @relation(fields: [mapId], references: [id], onDelete: Cascade)
+  preset         WorldMapBuildingPreset @relation(fields: [presetId], references: [id], onDelete: Cascade)
+
+  @@index([mapId])
+  @@index([mapId, col, row])
+  @@index([presetId])
+}
+
+model WorldMapTickLog {
+  id        String   @id @default(cuid())
+  mapId     String
+  day       Int
+  summary   Json?
+  createdAt DateTime @default(now())
+  map       WorldMap @relation(fields: [mapId], references: [id], onDelete: Cascade)
+
+  @@index([mapId, day])
+}
+

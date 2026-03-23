@@ -1,0 +1,38 @@
+[
+  {
+    "id": "0bafafa1-1951-4e4f-b86f-3482f05694d0",
+    "ownerId": "cmkezaqkc0003v9v4nn6bn9xh",
+    "name": "뉴-런던",
+    "imageUrl": "/uploads/world-maps/0bafafa1-1951-4e4f-b86f-3482f05694d0-c4cc38c3-40fe-4da4-8607-a2e4ad7828a4.jpg",
+    "imageWidth": 4096,
+    "imageHeight": 4096,
+    "hexSize": 157.5,
+    "originX": -105,
+    "originY": -220,
+    "cols": 30,
+    "rows": 30,
+    "orientation": "flat",
+    "cityGlobal": {
+      "values": {
+        "wood": 0,
+        "stone": 100,
+        "fabric": 50,
+        "weave": 100,
+        "food": 100,
+        "research": 0,
+        "order": 0,
+        "gold": 20000
+      },
+      "caps": {
+        "wood": 1000,
+        "stone": 1000,
+        "fabric": 1000,
+        "weave": 1000,
+        "food": 1000
+      },
+      "day": 157
+    },
+    "createdAt": "2026-03-17T09:22:38.795Z",
+    "updatedAt": "2026-03-19T09:45:46.319Z"
+  }
+]

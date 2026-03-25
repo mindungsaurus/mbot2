@@ -6,6 +6,7 @@
   NotFoundException,
   OnModuleInit,
 } from '@nestjs/common';
+import { DeleteObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -41,6 +42,8 @@ type UploadedImageFile = {
   mimetype?: string;
   originalname?: string;
 };
+
+type ImageStorageDriver = 'local' | 'r2';
 
 type UpdateWorldMapBody = {
   name?: string;
@@ -250,9 +253,22 @@ export class WorldMapsService implements OnModuleInit {
   private readonly rootDir = join(process.cwd(), 'data', 'world-maps');
   private readonly assetDir = join(this.rootDir, 'assets');
   private readonly legacyMetaPath = join(this.rootDir, 'maps.json');
+  private readonly imageStorageDriver: ImageStorageDriver =
+    (String(process.env.WORLD_MAP_IMAGE_STORAGE ?? 'local').trim().toLowerCase() as ImageStorageDriver) ===
+    'r2'
+      ? 'r2'
+      : 'local';
+  private readonly r2Bucket = String(process.env.R2_BUCKET ?? '').trim();
+  private readonly r2PublicBaseUrl = String(process.env.R2_PUBLIC_BASE_URL ?? '').trim().replace(/\/+$/, '');
+  private readonly r2Client: S3Client | null = this.createR2Client();
 
   constructor(private readonly prisma: PrismaClient) {
     this.ensureStorage();
+    if (this.imageStorageDriver === 'r2' && !this.isR2Enabled()) {
+      this.logger.warn(
+        '[world-maps] R2 저장소 설정이 완전하지 않아 local 저장소를 사용합니다. (필수: R2_ENDPOINT/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY/R2_BUCKET/R2_PUBLIC_BASE_URL)',
+      );
+    }
   }
 
   async onModuleInit() {
@@ -387,26 +403,13 @@ export class WorldMapsService implements OnModuleInit {
 
     const current = await this.requireWritable(user, id);
     const safeExt = extname(file.originalname || '').toLowerCase() || '.png';
-    const nextFileName = `${id}-${randomUUID()}${safeExt}`;
-    const fullPath = join(this.assetDir, nextFileName);
-    writeFileSync(fullPath, file.buffer);
-
-    const prevFile = (current.imageUrl ?? '').split('/').pop();
-    if (prevFile) {
-      const prevPath = join(this.assetDir, prevFile);
-      if (existsSync(prevPath)) {
-        try {
-          unlinkSync(prevPath);
-        } catch {
-          // ignore stale files
-        }
-      }
-    }
+    const imageUrl = await this.storeWorldMapImage(id, file, safeExt);
+    await this.deleteWorldMapImageByUrl(current.imageUrl ?? null);
 
     const updated = await this.prisma.worldMap.update({
       where: { id },
       data: {
-        imageUrl: `/uploads/world-maps/${nextFileName}`,
+        imageUrl,
       },
     });
     return this.toPublic(updated);
@@ -415,18 +418,7 @@ export class WorldMapsService implements OnModuleInit {
   async remove(user: AuthUser, id: string) {
     const current = await this.requireWritable(user, id);
     await this.prisma.worldMap.delete({ where: { id } });
-
-    const fileName = (current.imageUrl ?? '').split('/').pop();
-    if (fileName) {
-      const filePath = join(this.assetDir, fileName);
-      if (existsSync(filePath)) {
-        try {
-          unlinkSync(filePath);
-        } catch {
-          // ignore
-        }
-      }
-    }
+    await this.deleteWorldMapImageByUrl(current.imageUrl ?? null);
 
     return { ok: true };
   }
@@ -2066,8 +2058,114 @@ export class WorldMapsService implements OnModuleInit {
     return Math.max(Math.abs(dq), Math.abs(dr), Math.abs(ds));
   }
 
+  private createR2Client(): S3Client | null {
+    if (this.imageStorageDriver !== 'r2') return null;
+    const endpoint = String(process.env.R2_ENDPOINT ?? '').trim();
+    const accessKeyId = String(process.env.R2_ACCESS_KEY_ID ?? '').trim();
+    const secretAccessKey = String(process.env.R2_SECRET_ACCESS_KEY ?? '').trim();
+    if (!endpoint || !accessKeyId || !secretAccessKey) {
+      this.logger.warn(
+        '[world-maps] WORLD_MAP_IMAGE_STORAGE=r2 이지만 R2_ENDPOINT/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY 중 일부가 비어 있어 local 저장소로 동작합니다.',
+      );
+      return null;
+    }
+    return new S3Client({
+      region: 'auto',
+      endpoint,
+      credentials: { accessKeyId, secretAccessKey },
+    });
+  }
+
+  private isR2Enabled() {
+    return (
+      this.imageStorageDriver === 'r2' &&
+      !!this.r2Client &&
+      !!this.r2Bucket &&
+      !!this.r2PublicBaseUrl
+    );
+  }
+
   private ensureStorage() {
+    if (this.isR2Enabled()) return;
     mkdirSync(this.assetDir, { recursive: true });
+  }
+
+  private async storeWorldMapImage(
+    mapId: string,
+    file: UploadedImageFile,
+    safeExt: string,
+  ): Promise<string> {
+    if (this.isR2Enabled()) {
+      const key = `world-maps/${mapId}/${randomUUID()}${safeExt}`;
+      await this.r2Client!.send(
+        new PutObjectCommand({
+          Bucket: this.r2Bucket,
+          Key: key,
+          Body: file.buffer,
+          ContentType: String(file.mimetype ?? 'application/octet-stream'),
+          CacheControl: 'public, max-age=31536000, immutable',
+        }),
+      );
+      return `${this.r2PublicBaseUrl}/${key}`;
+    }
+
+    const nextFileName = `${mapId}-${randomUUID()}${safeExt}`;
+    const fullPath = join(this.assetDir, nextFileName);
+    writeFileSync(fullPath, file.buffer);
+    return `/uploads/world-maps/${nextFileName}`;
+  }
+
+  private extractLocalUploadName(url?: string | null): string | null {
+    const v = String(url ?? '').trim();
+    const prefix = '/uploads/world-maps/';
+    if (!v.startsWith(prefix)) return null;
+    const fileName = v.slice(prefix.length).split('?')[0].trim();
+    return fileName || null;
+  }
+
+  private extractR2Key(url?: string | null): string | null {
+    if (!this.r2PublicBaseUrl) return null;
+    const v = String(url ?? '').trim();
+    const prefix = `${this.r2PublicBaseUrl}/`;
+    if (!v.startsWith(prefix)) return null;
+    const key = v.slice(prefix.length).split('?')[0].trim();
+    return key || null;
+  }
+
+  private async deleteWorldMapImageByUrl(url?: string | null) {
+    const localFile = this.extractLocalUploadName(url);
+    if (localFile) {
+      const filePath = join(this.assetDir, localFile);
+      if (existsSync(filePath)) {
+        try {
+          unlinkSync(filePath);
+        } catch {
+          // ignore stale files
+        }
+      }
+      return;
+    }
+
+    const key = this.extractR2Key(url);
+    if (!key) return;
+    if (!this.r2Client || !this.r2Bucket) {
+      this.logger.warn(
+        `[world-maps] 이전 R2 이미지(${key}) 삭제를 건너뜀: R2 클라이언트 또는 버킷 설정 누락`,
+      );
+      return;
+    }
+    try {
+      await this.r2Client.send(
+        new DeleteObjectCommand({
+          Bucket: this.r2Bucket,
+          Key: key,
+        }),
+      );
+    } catch (e: any) {
+      this.logger.warn(
+        `[world-maps] R2 이미지 삭제 실패(${key}): ${String(e?.message ?? e)}`,
+      );
+    }
   }
 
   private async migrateLegacyJsonIfNeeded() {

@@ -27,7 +27,7 @@ import type {
   MapTileStatePreset,
   MapTileRegionState,
   UpkeepPopulationId,
-  ResourceId,
+  BuildingResourceId,
 } from './world-maps.types';
 
 type CreateWorldMapBody = {
@@ -59,11 +59,11 @@ type UpsertBuildingPresetBody = {
   space?: number | null;
   description?: string | null;
   placementRules?: BuildingPlacementRule[] | null;
-  buildCost?: Partial<Record<ResourceId, number>> | null;
-  researchCost?: Partial<Record<ResourceId, number>> | null;
+  buildCost?: Partial<Record<BuildingResourceId, number>> | null;
+  researchCost?: Partial<Record<BuildingResourceId, number>> | null;
   upkeep?:
     | {
-        resources?: Partial<Record<ResourceId, number>>;
+        resources?: Partial<Record<BuildingResourceId, number>>;
         population?: Partial<Record<UpkeepPopulationId, number>>;
       }
     | null;

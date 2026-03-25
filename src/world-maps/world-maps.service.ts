@@ -1,4 +1,4 @@
-import {
+﻿import {
   BadRequestException,
   ForbiddenException,
   Injectable,
@@ -18,6 +18,7 @@ import type {
   BuildingPresetLine,
   BuildingPlacementRule,
   BuildingRuleAction,
+  BuildingResourceId,
   CityGlobalState,
   CityPopulationState,
   HexOrientation,
@@ -29,6 +30,7 @@ import type {
   UpkeepPopulationId,
   PublicWorldMap,
   ResourceId,
+  CappedResourceId,
   WorldMapBuildingInstanceRow,
   WorldMapBuildingPresetRow,
   WorldMapTickLogRow,
@@ -65,11 +67,11 @@ type UpsertBuildingPresetBody = {
   space?: number | null;
   description?: string | null;
   placementRules?: BuildingPlacementRule[] | null;
-  buildCost?: Partial<Record<ResourceId, number>> | null;
-  researchCost?: Partial<Record<ResourceId, number>> | null;
+  buildCost?: Partial<Record<BuildingResourceId, number>> | null;
+  researchCost?: Partial<Record<BuildingResourceId, number>> | null;
   upkeep?:
     | {
-        resources?: Partial<Record<ResourceId, number>>;
+        resources?: Partial<Record<BuildingResourceId, number>>;
         population?: Partial<Record<UpkeepPopulationId, number>>;
       }
     | null;
@@ -106,6 +108,13 @@ type RuntimeInstance = WorldMapBuildingInstanceRow & {
   preset?: WorldMapBuildingPresetRow;
 };
 
+type OverflowConversionTracker = {
+  convertedGold: number;
+  details: Partial<Record<CappedResourceId, { overflowAmount: number; goldGain: number }>>;
+  beforeGold: number | null;
+  afterGold: number | null;
+};
+
 type RuntimeContext = {
   origin: RuntimeInstance;
   cityGlobal: CityGlobalState;
@@ -115,6 +124,7 @@ type RuntimeContext = {
   orientation: HexOrientation;
   cols: number;
   rows: number;
+  overflowTracker?: OverflowConversionTracker;
 };
 
 type PredicateEvalResult = {
@@ -154,6 +164,8 @@ const RESOURCE_IDS: ResourceId[] = [
   'order',
   'gold',
 ];
+const CAPPED_RESOURCE_IDS: ResourceId[] = ['wood', 'stone', 'fabric', 'weave', 'food'];
+const CAPPED_RESOURCE_SET = new Set<ResourceId>(CAPPED_RESOURCE_IDS);
 const RESOURCE_LABELS: Record<ResourceId, string> = {
   wood: '나무',
   stone: '석재',
@@ -212,14 +224,23 @@ const DEFAULT_CITY_GLOBAL: CityGlobalState = {
     weave: 100,
     food: 100,
   },
+  overflowToGold: {
+    wood: 0,
+    stone: 0,
+    fabric: 0,
+    weave: 0,
+    food: 0,
+  },
+  warehouse: {},
   day: 0,
+  satisfaction: 0,
   populationCap: 0,
   population: {
     settlers: { total: 0, available: 0 },
     engineers: { total: 0, available: 0 },
     scholars: { total: 0, available: 0 },
     laborers: { total: 0, available: 0 },
-    elderly: { total: 0 },
+    elderly: { total: 0, available: 0 },
   },
 };
 
@@ -523,7 +544,7 @@ export class WorldMapsService implements OnModuleInit {
     user: AuthUser,
     mapId: string,
     body: CreateBuildingInstanceBody,
-  ): Promise<WorldMapBuildingInstanceRow & { buildSummary?: { spent: Array<{ resourceId: ResourceId; label: string; amount: number }>; spaceAdded: number } }> {
+  ): Promise<WorldMapBuildingInstanceRow & { buildSummary?: { spent: Array<{ resourceId: BuildingResourceId; label: string; amount: number }>; spaceAdded: number } }> {
     const map = await this.requireWritable(user, mapId);
     const presetId = String(body?.presetId ?? '').trim();
     if (!presetId) throw new BadRequestException('presetId required');
@@ -549,15 +570,16 @@ export class WorldMapsService implements OnModuleInit {
     const cityGlobal = this.normalizeCityGlobalInput(map.cityGlobal);
     const tileRegionStates = this.normalizeTileRegionStatesInput(map.tileRegionStates);
     const buildCost = normalizedPreset.buildCost ?? {};
-    const spent: Array<{ resourceId: ResourceId; label: string; amount: number }> = [];
+    const spent: Array<{ resourceId: BuildingResourceId; label: string; amount: number }> = [];
     const lacking: string[] = [];
     for (const [resourceIdRaw, costRaw] of Object.entries(buildCost)) {
-      const resourceId = resourceIdRaw as ResourceId;
+      const resourceId = this.normalizeBuildingResourceId(resourceIdRaw);
+      if (!resourceId) continue;
       const cost = Math.max(0, Math.trunc(Number(costRaw) || 0));
       if (cost <= 0) continue;
-      const current = Math.max(0, Math.trunc(Number(cityGlobal.values[resourceId] ?? 0)));
+      const current = this.getBuildingResourceAmount(cityGlobal, resourceId);
       if (current < cost) {
-        lacking.push(`${RESOURCE_LABELS[resourceId] ?? resourceId}(${current}/${cost})`);
+        lacking.push(`${this.getBuildingResourceLabel(resourceId)}(${current}/${cost})`);
       }
     }
     if (lacking.length > 0) {
@@ -566,12 +588,13 @@ export class WorldMapsService implements OnModuleInit {
       );
     }
     for (const [resourceIdRaw, costRaw] of Object.entries(buildCost)) {
-      const resourceId = resourceIdRaw as ResourceId;
+      const resourceId = this.normalizeBuildingResourceId(resourceIdRaw);
+      if (!resourceId) continue;
       const cost = Math.max(0, Math.trunc(Number(costRaw) || 0));
       if (cost <= 0) continue;
-      const current = Math.max(0, Math.trunc(Number(cityGlobal.values[resourceId] ?? 0)));
-      cityGlobal.values[resourceId] = Math.max(0, current - cost);
-      spent.push({ resourceId, label: RESOURCE_LABELS[resourceId] ?? resourceId, amount: cost });
+      const current = this.getBuildingResourceAmount(cityGlobal, resourceId);
+      this.setBuildingResourceAmount(cityGlobal, resourceId, Math.max(0, current - cost));
+      spent.push({ resourceId, label: this.getBuildingResourceLabel(resourceId), amount: cost });
     }
 
     const presetSpace = Math.max(0, Math.trunc(Number(normalizedPreset.space ?? 0)));
@@ -773,6 +796,28 @@ export class WorldMapsService implements OnModuleInit {
         requiredEffort <= 0
           ? 'active'
           : statusFromMeta ?? (current.progressEffort >= requiredEffort ? 'active' : 'building');
+      // 미완공(건설중) 건물 제거 시에는 건설 비용을 환불한다.
+      // 완공 건물은 기본적으로 환불하지 않으며, 별도 onRemove 규칙으로만 자원 변화가 난다.
+      if (status === 'building' && normalizedPreset?.buildCost) {
+        const cityGlobal = this.normalizeCityGlobalInput(map.cityGlobal);
+        for (const [resourceIdRaw, costRaw] of Object.entries(normalizedPreset.buildCost)) {
+          const resourceId = this.normalizeBuildingResourceId(resourceIdRaw);
+          if (!resourceId) continue;
+          const cost = Math.max(0, Math.trunc(Number(costRaw) || 0));
+          if (cost <= 0) continue;
+          const currentValue = this.getBuildingResourceAmount(cityGlobal, resourceId);
+          let nextValue = currentValue + cost;
+          if (this.isBaseResourceId(resourceId) && CAPPED_RESOURCE_SET.has(resourceId)) {
+            const cap = Math.max(
+              0,
+              Math.trunc(Number(cityGlobal.caps[resourceId as keyof typeof cityGlobal.caps] ?? 0) || 0),
+            );
+            nextValue = Math.min(cap, nextValue);
+          }
+          this.setBuildingResourceAmount(cityGlobal, resourceId, Math.max(0, Math.trunc(nextValue)));
+        }
+        map.cityGlobal = cityGlobal as unknown as Prisma.JsonValue;
+      }
       if (current.enabled && status === 'building') {
         const workersByType = this.extractAssignedWorkersByTypeFromMeta(current.meta);
         const cityGlobal = this.normalizeCityGlobalInput(map.cityGlobal);
@@ -843,6 +888,12 @@ export class WorldMapsService implements OnModuleInit {
       failedRules: 0,
       day: 0,
       logs: [] as RuleExecutionLog[],
+      overflowConvertedGold: 0,
+      overflowBeforeGold: null as number | null,
+      overflowAfterGold: null as number | null,
+      overflowDetails: {} as Partial<
+        Record<CappedResourceId, { overflowAmount: number; goldGain: number }>
+      >,
     };
     for (let i = 0; i < days; i += 1) {
       const iter = await this.applyBuildingEventEffects(mapId, 'daily', undefined, true);
@@ -853,6 +904,37 @@ export class WorldMapsService implements OnModuleInit {
         failedRules: summary.failedRules + iter.failedRules,
         day: iter.day,
         logs: [...summary.logs, ...iter.logs].slice(-500),
+        overflowConvertedGold:
+          summary.overflowConvertedGold +
+          Math.max(0, Math.trunc(Number(iter.overflowConvertedGold ?? 0) || 0)),
+        overflowBeforeGold:
+          summary.overflowBeforeGold == null
+            ? (iter.overflowBeforeGold ?? null)
+            : summary.overflowBeforeGold,
+        overflowAfterGold:
+          iter.overflowAfterGold != null ? iter.overflowAfterGold : summary.overflowAfterGold,
+        overflowDetails: (() => {
+          const next = { ...(summary.overflowDetails ?? {}) } as Partial<
+            Record<CappedResourceId, { overflowAmount: number; goldGain: number }>
+          >;
+          const iterDetails = Array.isArray(iter.overflowDetails) ? iter.overflowDetails : [];
+          for (const detail of iterDetails) {
+            const resourceId = detail?.resourceId as CappedResourceId;
+            if (!resourceId || !CAPPED_RESOURCE_SET.has(resourceId as ResourceId)) continue;
+            const overflowAmount = Math.max(
+              0,
+              Math.trunc(Number(detail?.overflowAmount ?? 0) || 0),
+            );
+            const goldGain = Math.max(0, Math.trunc(Number(detail?.goldGain ?? 0) || 0));
+            if (overflowAmount <= 0 || goldGain <= 0) continue;
+            const prev = next[resourceId] ?? { overflowAmount: 0, goldGain: 0 };
+            next[resourceId] = {
+              overflowAmount: prev.overflowAmount + overflowAmount,
+              goldGain: prev.goldGain + goldGain,
+            };
+          }
+          return next;
+        })(),
       };
     }
     await this.prisma.worldMapTickLog.create({
@@ -866,10 +948,21 @@ export class WorldMapsService implements OnModuleInit {
           failedRules: summary.failedRules,
           day: summary.day,
           logs: summary.logs,
+          overflowConvertedGold: summary.overflowConvertedGold,
+          overflowBeforeGold: summary.overflowBeforeGold,
+          overflowAfterGold: summary.overflowAfterGold,
+          overflowDetails: summary.overflowDetails,
         } as unknown as Prisma.InputJsonValue,
       },
     });
-    return { ok: true, ...summary };
+    const overflowDetails = (Object.entries(summary.overflowDetails) as Array<
+      [CappedResourceId, { overflowAmount: number; goldGain: number }]
+    >).map(([resourceId, v]) => ({
+      resourceId,
+      overflowAmount: Math.max(0, Math.trunc(Number(v?.overflowAmount ?? 0) || 0)),
+      goldGain: Math.max(0, Math.trunc(Number(v?.goldGain ?? 0) || 0)),
+    }));
+    return { ok: true, ...summary, overflowDetails };
   }
 
   private async applyBuildingEventEffects(
@@ -967,6 +1060,7 @@ export class WorldMapsService implements OnModuleInit {
           orientation,
           cols: mapRow.cols,
           rows: mapRow.rows,
+          overflowTracker,
         };
         const pred = rule.when
           ? this.evaluateRulePredicateDetailed(rule.when, ctx)
@@ -1031,6 +1125,12 @@ export class WorldMapsService implements OnModuleInit {
     let appliedActions = 0;
     let failedRules = 0;
     const logs: RuleExecutionLog[] = [];
+    const overflowTracker: OverflowConversionTracker = {
+      convertedGold: 0,
+      details: {},
+      beforeGold: null,
+      afterGold: null,
+    };
     const orientation: HexOrientation = mapRow.orientation === 'flat' ? 'flat' : 'pointy';
     const instancePatchById = new Map<
       string,
@@ -1181,6 +1281,22 @@ export class WorldMapsService implements OnModuleInit {
       appliedActions,
       failedRules,
       logs,
+      overflowConvertedGold: Math.max(0, Math.trunc(Number(overflowTracker.convertedGold || 0))),
+      overflowBeforeGold: overflowTracker.beforeGold,
+      overflowAfterGold: overflowTracker.afterGold,
+      overflowDetails: (Object.entries(overflowTracker.details) as Array<
+        [CappedResourceId, { overflowAmount: number; goldGain: number }]
+      >)
+        .filter(
+          ([, v]) =>
+            Math.max(0, Math.trunc(Number(v?.overflowAmount ?? 0) || 0)) > 0 &&
+            Math.max(0, Math.trunc(Number(v?.goldGain ?? 0) || 0)) > 0,
+        )
+        .map(([resourceId, v]) => ({
+          resourceId,
+          overflowAmount: Math.max(0, Math.trunc(Number(v.overflowAmount ?? 0) || 0)),
+          goldGain: Math.max(0, Math.trunc(Number(v.goldGain ?? 0) || 0)),
+        })),
     };
   }
 
@@ -1401,21 +1517,44 @@ export class WorldMapsService implements OnModuleInit {
   private applyRuleAction(action: BuildingRuleAction, ctx: RuntimeContext): boolean {
     if (!action || typeof action !== 'object') return false;
     if (action.kind === 'adjustResource') {
+      const resourceId = this.normalizeBuildingResourceId((action as any).resourceId);
+      if (!resourceId) return false;
       const delta = Math.trunc(this.evalRuleExpr(action.delta, ctx));
-      const current = ctx.cityGlobal.values[action.resourceId] ?? 0;
+      const current = this.getBuildingResourceAmount(ctx.cityGlobal, resourceId);
       let next = current + delta;
       if (next < 0) next = 0;
-      if (
-        action.resourceId === 'wood' ||
-        action.resourceId === 'stone' ||
-        action.resourceId === 'fabric' ||
-        action.resourceId === 'weave' ||
-        action.resourceId === 'food'
-      ) {
-        const cap = ctx.cityGlobal.caps[action.resourceId] ?? 0;
-        if (next > cap) next = cap;
+      if (this.isBaseResourceId(resourceId) && CAPPED_RESOURCE_SET.has(resourceId)) {
+        const cap = ctx.cityGlobal.caps[resourceId] ?? 0;
+        if (next > cap) {
+          const overflow = Math.max(0, next - cap);
+          next = cap;
+          const rate = Math.max(
+            0,
+            Math.trunc(Number(ctx.cityGlobal.overflowToGold?.[resourceId] ?? 0) || 0),
+          );
+          if (overflow > 0 && rate > 0) {
+            const currentGold = Math.max(
+              0,
+              Math.trunc(Number(ctx.cityGlobal.values.gold ?? 0) || 0),
+            );
+            const goldGain = overflow * rate;
+            const nextGold = currentGold + goldGain;
+            ctx.cityGlobal.values.gold = nextGold;
+            const tracker = ctx.overflowTracker;
+            if (tracker) {
+              if (tracker.beforeGold == null) tracker.beforeGold = currentGold;
+              tracker.afterGold = nextGold;
+              tracker.convertedGold += goldGain;
+              const prev = tracker.details[resourceId] ?? { overflowAmount: 0, goldGain: 0 };
+              tracker.details[resourceId] = {
+                overflowAmount: prev.overflowAmount + overflow,
+                goldGain: prev.goldGain + goldGain,
+              };
+            }
+          }
+        }
       }
-      ctx.cityGlobal.values[action.resourceId] = next;
+      this.setBuildingResourceAmount(ctx.cityGlobal, resourceId, next);
       return delta !== 0;
     }
     if (action.kind === 'adjustResourceCap') {
@@ -1532,7 +1671,9 @@ export class WorldMapsService implements OnModuleInit {
     if (!expr || typeof expr !== 'object') return 0;
     if (expr.kind === 'const') return Number(expr.value) || 0;
     if (expr.kind === 'resource') {
-      return Number(ctx.cityGlobal.values?.[expr.resourceId as ResourceId] ?? 0) || 0;
+      const resourceId = this.normalizeBuildingResourceId((expr as any).resourceId);
+      if (!resourceId) return 0;
+      return this.getBuildingResourceAmount(ctx.cityGlobal, resourceId);
     }
     if (expr.kind === 'population') {
       const entry = ctx.cityGlobal.population?.[expr.populationId as PopulationId];
@@ -1615,23 +1756,6 @@ export class WorldMapsService implements OnModuleInit {
       Math.max(0, population.scholars?.available ?? 0) +
       Math.max(0, population.laborers?.available ?? 0)
     );
-  }
-
-  private consumeAnyNonElderly(population: CityPopulationState, amount: number) {
-    let remain = Math.max(0, Math.trunc(Number(amount) || 0));
-    if (remain <= 0) return 0;
-    const order: PopulationTrackedId[] = ['laborers', 'settlers', 'engineers', 'scholars'];
-    for (const id of order) {
-      if (remain <= 0) break;
-      const entry = population[id] ?? { total: 0, available: 0 };
-      const available = Math.max(0, entry.available ?? 0);
-      const take = Math.min(available, remain);
-      if (take <= 0) continue;
-      entry.available = available - take;
-      population[id] = entry;
-      remain -= take;
-    }
-    return Math.max(0, Math.trunc(Number(amount) || 0) - remain);
   }
 
   private extractAssignedWorkersByTypeFromMeta(
@@ -1771,12 +1895,13 @@ export class WorldMapsService implements OnModuleInit {
     const reasons: string[] = [];
 
     for (const [rawId, rawCost] of Object.entries(resourceCosts)) {
-      const resourceId = rawId as ResourceId;
+      const resourceId = this.normalizeBuildingResourceId(rawId);
+      if (!resourceId) continue;
       const cost = Math.max(0, Math.trunc(Number(rawCost) || 0));
       if (cost <= 0) continue;
-      const current = Math.max(0, Math.trunc(Number(cityGlobal.values[resourceId] ?? 0)));
+      const current = this.getBuildingResourceAmount(cityGlobal, resourceId);
       if (current < cost) {
-        reasons.push(`${RESOURCE_LABELS[resourceId] ?? resourceId} 부족(${current}/${cost})`);
+        reasons.push(`${this.getBuildingResourceLabel(resourceId)} 부족(${current}/${cost})`);
       }
     }
 
@@ -1792,7 +1917,12 @@ export class WorldMapsService implements OnModuleInit {
         continue;
       }
       if (populationId === 'elderly') {
-        const current = Math.max(0, Math.trunc(Number(cityGlobal.population.elderly?.total ?? 0)));
+        const current = Math.max(
+          0,
+          Math.trunc(
+            Number(cityGlobal.population.elderly?.available ?? cityGlobal.population.elderly?.total ?? 0),
+          ),
+        );
         if (current < cost) {
           reasons.push(`${POPULATION_LABELS[populationId]} 부족(${current}/${cost})`);
         }
@@ -1808,30 +1938,14 @@ export class WorldMapsService implements OnModuleInit {
     if (reasons.length > 0) return { ok: false as const, reasons };
 
     for (const [rawId, rawCost] of Object.entries(resourceCosts)) {
-      const resourceId = rawId as ResourceId;
+      const resourceId = this.normalizeBuildingResourceId(rawId);
+      if (!resourceId) continue;
       const cost = Math.max(0, Math.trunc(Number(rawCost) || 0));
       if (cost <= 0) continue;
-      const current = Math.max(0, Math.trunc(Number(cityGlobal.values[resourceId] ?? 0)));
-      cityGlobal.values[resourceId] = Math.max(0, current - cost);
+      const current = this.getBuildingResourceAmount(cityGlobal, resourceId);
+      this.setBuildingResourceAmount(cityGlobal, resourceId, Math.max(0, current - cost));
     }
-    for (const [rawId, rawCost] of Object.entries(populationCosts)) {
-      const populationId = rawId as UpkeepPopulationId;
-      const cost = Math.max(0, Math.trunc(Number(rawCost) || 0));
-      if (cost <= 0) continue;
-      if (populationId === 'anyNonElderly') {
-        this.consumeAnyNonElderly(cityGlobal.population, cost);
-        continue;
-      }
-      if (populationId === 'elderly') {
-        const current = Math.max(0, Math.trunc(Number(cityGlobal.population.elderly?.total ?? 0)));
-        cityGlobal.population.elderly.total = Math.max(0, current - cost);
-        continue;
-      }
-      const entry = cityGlobal.population[populationId] ?? { total: 0, available: 0 };
-      const available = Math.max(0, Math.trunc(Number(entry.available ?? 0)));
-      entry.available = Math.max(0, available - cost);
-      cityGlobal.population[populationId] = entry;
-    }
+    // 유지 인구는 "소모"가 아니라 "요구 충족" 개념이므로 일일 실행 시 인구를 차감하지 않는다.
     return { ok: true as const, reasons: [] as string[] };
   }
 
@@ -2154,14 +2268,79 @@ export class WorldMapsService implements OnModuleInit {
     return value as Record<string, unknown>;
   }
 
+  private isBaseResourceId(value: string): value is ResourceId {
+    return RESOURCE_IDS.includes(value as ResourceId);
+  }
+
+  private normalizeBuildingResourceId(value: unknown): BuildingResourceId | undefined {
+    const raw = String(value ?? '').trim();
+    if (!raw) return undefined;
+    if (this.isBaseResourceId(raw)) return raw;
+    if (raw.startsWith('item:')) {
+      const name = raw.slice(5).trim();
+      if (!name) return undefined;
+      return `item:${name}`;
+    }
+    return undefined;
+  }
+
+  private getWarehouseAmount(cityGlobal: CityGlobalState, itemName: string) {
+    const warehouse = cityGlobal.warehouse ?? {};
+    return Math.max(0, Math.trunc(Number(warehouse[itemName] ?? 0) || 0));
+  }
+
+  private setWarehouseAmount(cityGlobal: CityGlobalState, itemName: string, amount: number) {
+    const warehouse = cityGlobal.warehouse ?? {};
+    const next = Math.max(0, Math.trunc(Number(amount) || 0));
+    if (next <= 0) {
+      if (Object.prototype.hasOwnProperty.call(warehouse, itemName)) {
+        delete warehouse[itemName];
+      }
+    } else {
+      warehouse[itemName] = next;
+    }
+    cityGlobal.warehouse = warehouse;
+  }
+
+  private getBuildingResourceAmount(cityGlobal: CityGlobalState, resourceId: BuildingResourceId) {
+    if (this.isBaseResourceId(resourceId)) {
+      return Math.max(0, Math.trunc(Number(cityGlobal.values[resourceId] ?? 0) || 0));
+    }
+    const itemName = resourceId.slice(5).trim();
+    if (!itemName) return 0;
+    return this.getWarehouseAmount(cityGlobal, itemName);
+  }
+
+  private setBuildingResourceAmount(
+    cityGlobal: CityGlobalState,
+    resourceId: BuildingResourceId,
+    amount: number,
+  ) {
+    const next = Math.max(0, Math.trunc(Number(amount) || 0));
+    if (this.isBaseResourceId(resourceId)) {
+      cityGlobal.values[resourceId] = next;
+      return;
+    }
+    const itemName = resourceId.slice(5).trim();
+    if (!itemName) return;
+    this.setWarehouseAmount(cityGlobal, itemName, next);
+  }
+
+  private getBuildingResourceLabel(resourceId: BuildingResourceId) {
+    if (this.isBaseResourceId(resourceId)) return RESOURCE_LABELS[resourceId] ?? resourceId;
+    return resourceId.startsWith('item:') ? resourceId.slice(5).trim() || resourceId : resourceId;
+  }
+
   private normalizeResourceCostsInput(
     input: unknown,
-  ): Partial<Record<ResourceId, number>> | undefined {
+  ): Partial<Record<BuildingResourceId, number>> | undefined {
     const src = this.toPlainRecord(input);
     if (!src) return undefined;
-    const out: Partial<Record<ResourceId, number>> = {};
-    for (const id of RESOURCE_IDS) {
-      const n = this.toNullableIntMin(src[id], 0);
+    const out: Partial<Record<BuildingResourceId, number>> = {};
+    for (const [rawId, rawValue] of Object.entries(src)) {
+      const id = this.normalizeBuildingResourceId(rawId);
+      if (!id) continue;
+      const n = this.toNullableIntMin(rawValue, 0);
       if (n != null) out[id] = n;
     }
     return Object.keys(out).length > 0 ? out : undefined;
@@ -2292,10 +2471,7 @@ export class WorldMapsService implements OnModuleInit {
       const kind = String(cast.kind ?? '').trim();
       if (!kind) continue;
       if (kind === 'adjustResource') {
-        const resourceIdRaw = String(cast.resourceId ?? '').trim();
-        const resourceId: ResourceId = RESOURCE_IDS.includes(resourceIdRaw as ResourceId)
-          ? (resourceIdRaw as ResourceId)
-          : 'gold';
+        const resourceId = this.normalizeBuildingResourceId(cast.resourceId) ?? 'gold';
         out.push({
           kind,
           resourceId,
@@ -2437,7 +2613,7 @@ export class WorldMapsService implements OnModuleInit {
     input: unknown,
   ):
     | {
-        resources?: Partial<Record<ResourceId, number>>;
+        resources?: Partial<Record<BuildingResourceId, number>>;
         population?: Partial<Record<UpkeepPopulationId, number>>;
       }
     | undefined {
@@ -2677,8 +2853,14 @@ export class WorldMapsService implements OnModuleInit {
   private normalizeCityGlobalInput(input: any): CityGlobalState {
     const valuesIn = input?.values ?? {};
     const capsIn = input?.caps ?? {};
+    const overflowToGoldIn = input?.overflowToGold ?? {};
     const dayIn = input?.day;
+    const satisfactionIn = input?.satisfaction;
     const populationIn = input?.population ?? {};
+    const warehouseIn =
+      input?.warehouse && typeof input.warehouse === 'object'
+        ? (input.warehouse as Record<string, unknown>)
+        : {};
     const toIntSafe = (v: unknown, fallback: number) => {
       const n = Math.trunc(Number(v));
       if (!Number.isFinite(n)) return fallback;
@@ -2701,12 +2883,23 @@ export class WorldMapsService implements OnModuleInit {
       engineers: normalizeTrackedPopulation('engineers'),
       scholars: normalizeTrackedPopulation('scholars'),
       laborers: normalizeTrackedPopulation('laborers'),
-      elderly: {
-        total: toIntSafe(
+      elderly: (() => {
+        const total = toIntSafe(
           populationIn?.elderly?.total,
           DEFAULT_CITY_GLOBAL.population.elderly.total,
-        ),
-      },
+        );
+        const hasAvailable =
+          populationIn?.elderly != null &&
+          Object.prototype.hasOwnProperty.call(populationIn.elderly, 'available');
+        const fallbackAvailable = hasAvailable
+          ? (DEFAULT_CITY_GLOBAL.population.elderly as any).available ?? 0
+          : total;
+        const available = Math.min(
+          total,
+          toIntSafe(populationIn?.elderly?.available, fallbackAvailable),
+        );
+        return { total, available };
+      })(),
     };
     const totalPopulation =
       population.settlers.total +
@@ -2736,7 +2929,26 @@ export class WorldMapsService implements OnModuleInit {
         weave: toIntSafe(capsIn.weave, DEFAULT_CITY_GLOBAL.caps.weave),
         food: toIntSafe(capsIn.food, DEFAULT_CITY_GLOBAL.caps.food),
       },
+      overflowToGold: {
+        wood: toIntSafe(overflowToGoldIn.wood, DEFAULT_CITY_GLOBAL.overflowToGold.wood),
+        stone: toIntSafe(overflowToGoldIn.stone, DEFAULT_CITY_GLOBAL.overflowToGold.stone),
+        fabric: toIntSafe(overflowToGoldIn.fabric, DEFAULT_CITY_GLOBAL.overflowToGold.fabric),
+        weave: toIntSafe(overflowToGoldIn.weave, DEFAULT_CITY_GLOBAL.overflowToGold.weave),
+        food: toIntSafe(overflowToGoldIn.food, DEFAULT_CITY_GLOBAL.overflowToGold.food),
+      },
+      warehouse: (() => {
+        const out: Record<string, number> = {};
+        for (const [nameRaw, amountRaw] of Object.entries(warehouseIn)) {
+          const name = String(nameRaw ?? '').trim();
+          if (!name) continue;
+          const amount = toIntSafe(amountRaw, 0);
+          if (amount <= 0) continue;
+          out[name] = amount;
+        }
+        return out;
+      })(),
       day: toIntSafe(dayIn, DEFAULT_CITY_GLOBAL.day),
+      satisfaction: toIntSafe(satisfactionIn, DEFAULT_CITY_GLOBAL.satisfaction),
       populationCap,
       population,
     };
@@ -2784,4 +2996,5 @@ export class WorldMapsService implements OnModuleInit {
     return num;
   }
 }
+
 

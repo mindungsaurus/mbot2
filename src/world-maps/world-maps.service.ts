@@ -3141,7 +3141,6 @@ export class WorldMapsService implements OnModuleInit {
   ): Record<string, MapTileStateAssignment[]> {
     const src = input as Record<string, unknown>;
     if (!src || typeof src !== 'object') return {};
-    const validPresetIds = new Set(presets.map((p) => p.id));
     const out: Record<string, MapTileStateAssignment[]> = {};
     for (const [key, value] of Object.entries(src)) {
       if (!Array.isArray(value)) continue;
@@ -3149,13 +3148,21 @@ export class WorldMapsService implements OnModuleInit {
       for (const item of value) {
         const cast = item as Partial<MapTileStateAssignment> | null | undefined;
         const presetId = String(cast?.presetId ?? '').trim();
-        if (!presetId || !validPresetIds.has(presetId)) continue;
+        if (!presetId) continue;
+
         const preset = presets.find((p) => p.id === presetId);
-        if (!preset) continue;
         const assignment: MapTileStateAssignment = { presetId };
-        if (preset.hasValue && cast?.value != null) {
-          assignment.value = String(cast.value).trim();
+
+        if (preset?.hasValue) {
+          if (cast?.value != null) {
+            assignment.value = String(cast.value).trim();
+          }
+        } else if (!preset && cast?.value != null) {
+          // 공유 프리셋 등 현재 preset 목록에 없는 항목도 value를 보존한다.
+          const rawValue = String(cast.value).trim();
+          if (rawValue) assignment.value = rawValue;
         }
+
         next.push(assignment);
       }
       if (next.length > 0) out[key] = next;
@@ -3401,5 +3408,6 @@ export class WorldMapsService implements OnModuleInit {
     return num;
   }
 }
+
 
 

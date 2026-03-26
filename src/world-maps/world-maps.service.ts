@@ -1512,7 +1512,12 @@ export class WorldMapsService implements OnModuleInit {
 
     const targets =
       event === 'daily'
-        ? instances.filter((entry) => entry.enabled && determineStatus(entry) === 'active')
+        ? instances.filter(
+            (entry) =>
+              entry.enabled &&
+              determineStatus(entry) === 'active' &&
+              !activateNow.has(entry.id),
+          )
         : instances.filter((entry) => targetSet.has(entry.id));
 
     for (const origin of targets) {

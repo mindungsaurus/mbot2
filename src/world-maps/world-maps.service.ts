@@ -279,6 +279,108 @@ export class WorldMapsService implements OnModuleInit {
 
   async onModuleInit() {
     await this.migrateLegacyJsonIfNeeded();
+    await this.migrateMapScopedPresetsToSharedIfNeeded();
+  }
+
+  private async migrateMapScopedPresetsToSharedIfNeeded() {
+    // 1) Tile presets: world map json(field) -> shared table
+    let tileCreated = 0;
+    try {
+      const sharedTileRows = await this.prisma.worldMapTileStatePreset.findMany({
+        select: { name: true },
+      });
+      const sharedTileNameKey = new Set(
+        sharedTileRows.map((row) => String(row.name ?? '').trim().toLowerCase()).filter(Boolean),
+      );
+      const maps = await this.prisma.worldMap.findMany({
+        select: { id: true, tileStatePresets: true },
+      });
+      for (const mapRow of maps) {
+        const presets = this.normalizeTilePresetsInput(mapRow.tileStatePresets);
+        for (const preset of presets) {
+          const name = String(preset.name ?? '').trim();
+          const nameKey = name.toLowerCase();
+          if (!name || sharedTileNameKey.has(nameKey)) continue;
+          try {
+            await this.prisma.worldMapTileStatePreset.create({
+              data: {
+                name,
+                color: this.normalizeHexColor(preset.color, '#e5e7eb'),
+                hasValue: !!preset.hasValue,
+              },
+            });
+            sharedTileNameKey.add(nameKey);
+            tileCreated += 1;
+          } catch {
+            // ignore row-level create failures and continue
+          }
+        }
+      }
+    } catch (e: any) {
+      this.logger.warn(
+        `[world-maps] shared tile preset migration skipped: ${String(e?.message ?? e)}`,
+      );
+    }
+
+    // 2) Building presets: map-scoped rows -> shared rows(mapId = null)
+    let buildingCreated = 0;
+    try {
+      const sharedBuildingRows = await this.prisma.worldMapBuildingPreset.findMany({
+        where: { mapId: null },
+        select: { name: true, tier: true },
+      });
+      const sharedBuildingKey = new Set(
+        sharedBuildingRows.map((row) => this.makeBuildingSharedKey(row.name, row.tier)),
+      );
+      const localRows = await this.prisma.worldMapBuildingPreset.findMany({
+        where: { NOT: { mapId: null } },
+        orderBy: [{ createdAt: 'asc' }],
+      });
+      for (const row of localRows) {
+        const name = String(row.name ?? '').trim();
+        if (!name) continue;
+        const key = this.makeBuildingSharedKey(row.name, row.tier);
+        if (sharedBuildingKey.has(key)) continue;
+        try {
+          await this.prisma.worldMapBuildingPreset.create({
+            data: {
+              mapId: null,
+              name,
+              color: this.normalizeHexColor(row.color, '#eab308'),
+              tier: String(row.tier ?? '').trim() || null,
+              effort: this.toNullableIntMin(row.effort, 0),
+              space: this.toNullableIntMin(row.space, 0),
+              description: String(row.description ?? '').trim() || null,
+              placementRules: this.normalizePlacementRulesInput(row.placementRules),
+              buildCost: this.normalizeResourceCostsInput(row.buildCost),
+              researchCost: this.normalizeResourceCostsInput(row.researchCost),
+              upkeep: this.normalizeUpkeepInput(row.upkeep),
+              effects: this.normalizeEffectsInput(row.effects),
+            },
+          });
+          sharedBuildingKey.add(key);
+          buildingCreated += 1;
+        } catch {
+          // ignore row-level create failures and continue
+        }
+      }
+    } catch (e: any) {
+      this.logger.warn(
+        `[world-maps] shared building preset migration skipped: ${String(e?.message ?? e)}`,
+      );
+    }
+
+    if (tileCreated > 0 || buildingCreated > 0) {
+      this.logger.log(
+        `[world-maps] shared preset migration completed: tileCreated=${tileCreated}, buildingCreated=${buildingCreated}`,
+      );
+    }
+  }
+
+  private makeBuildingSharedKey(name: unknown, tier: unknown) {
+    const n = String(name ?? '').trim().toLowerCase();
+    const t = String(tier ?? '').trim().toLowerCase();
+    return `${n}::${t}`;
   }
 
   async list(user: AuthUser): Promise<PublicWorldMap[]> {

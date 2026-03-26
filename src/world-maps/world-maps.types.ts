@@ -216,7 +216,7 @@ export type BuildingPlacementRule =
 
 export type WorldMapBuildingPresetRow = {
   id: string;
-  mapId: string;
+  mapId: string | null;
   name: string;
   color: string;
   tier?: string;

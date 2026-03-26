@@ -62,6 +62,12 @@ type UpdateWorldMapBody = {
   buildingPresets?: BuildingPreset[];
 };
 
+type SharedTilePresetBody = {
+  name?: string;
+  color?: string;
+  hasValue?: boolean;
+};
+
 type UpsertBuildingPresetBody = {
   name?: string;
   color?: string;
@@ -288,6 +294,187 @@ export class WorldMapsService implements OnModuleInit {
     return this.toPublic(row);
   }
 
+  async listSharedTilePresets(_user: AuthUser): Promise<MapTileStatePreset[]> {
+    const rows = await this.prisma.worldMapTileStatePreset.findMany({
+      orderBy: [{ name: 'asc' }, { createdAt: 'asc' }],
+    });
+    return rows.map((row) => this.toSharedTilePresetRow(row));
+  }
+
+  async createSharedTilePreset(user: AuthUser, body: SharedTilePresetBody): Promise<MapTileStatePreset> {
+    this.requireAdmin(user);
+    const name = String(body?.name ?? '').trim();
+    if (!name) throw new BadRequestException('tile preset name required');
+    const color = this.normalizeHexColor(body?.color, '#e5e7eb');
+    const hasValue = !!body?.hasValue;
+    const row = await this.prisma.worldMapTileStatePreset.create({
+      data: {
+        name,
+        color,
+        hasValue,
+      },
+    });
+    return this.toSharedTilePresetRow(row);
+  }
+
+  async updateSharedTilePreset(
+    user: AuthUser,
+    presetId: string,
+    body: SharedTilePresetBody,
+  ): Promise<MapTileStatePreset> {
+    this.requireAdmin(user);
+    const current = await this.prisma.worldMapTileStatePreset.findUnique({
+      where: { id: presetId },
+    });
+    if (!current) throw new NotFoundException('shared tile preset not found');
+    const data: Prisma.WorldMapTileStatePresetUpdateInput = {};
+    if (body.name !== undefined) {
+      const name = String(body.name ?? '').trim();
+      if (!name) throw new BadRequestException('tile preset name required');
+      data.name = name;
+    }
+    if (body.color !== undefined) data.color = this.normalizeHexColor(body.color, '#e5e7eb');
+    if (body.hasValue !== undefined) data.hasValue = !!body.hasValue;
+    const row = await this.prisma.worldMapTileStatePreset.update({
+      where: { id: presetId },
+      data,
+    });
+    return this.toSharedTilePresetRow(row);
+  }
+
+  async deleteSharedTilePreset(user: AuthUser, presetId: string) {
+    this.requireAdmin(user);
+    const current = await this.prisma.worldMapTileStatePreset.findUnique({
+      where: { id: presetId },
+      select: { id: true },
+    });
+    if (!current) throw new NotFoundException('shared tile preset not found');
+    await this.prisma.worldMapTileStatePreset.delete({ where: { id: presetId } });
+    const sharedRows = await this.prisma.worldMapTileStatePreset.findMany({
+      orderBy: [{ name: 'asc' }, { createdAt: 'asc' }],
+    });
+    const sharedPresets = sharedRows.map((row) => this.toSharedTilePresetRow(row));
+
+    const maps = await this.prisma.worldMap.findMany({
+      select: { id: true, tileStateAssignments: true },
+    });
+    for (const mapRow of maps) {
+      const assignments = this.normalizeTileStateAssignmentsInput(
+        mapRow.tileStateAssignments,
+        sharedPresets,
+      );
+      const next: Record<string, MapTileStateAssignment[]> = {};
+      let changed = false;
+      for (const [key, rows] of Object.entries(assignments)) {
+        const filtered = rows.filter((entry) => entry.presetId !== presetId);
+        if (filtered.length !== rows.length) changed = true;
+        if (filtered.length > 0) next[key] = filtered;
+      }
+      if (!changed) continue;
+      await this.prisma.worldMap.update({
+        where: { id: mapRow.id },
+        data: {
+          tileStateAssignments: next as unknown as Prisma.InputJsonValue,
+        },
+      });
+    }
+    return { ok: true };
+  }
+
+  async listSharedBuildingPresets(_user: AuthUser): Promise<WorldMapBuildingPresetRow[]> {
+    const rows = await this.prisma.worldMapBuildingPreset.findMany({
+      where: { mapId: null },
+      orderBy: [{ name: 'asc' }, { createdAt: 'asc' }],
+    });
+    return rows.map((row) => this.toBuildingPresetRow(row));
+  }
+
+  async createSharedBuildingPreset(
+    user: AuthUser,
+    body: UpsertBuildingPresetBody,
+  ): Promise<WorldMapBuildingPresetRow> {
+    this.requireAdmin(user);
+    const name = String(body?.name ?? '').trim();
+    if (!name) throw new BadRequestException('building preset name required');
+    const row = await this.prisma.worldMapBuildingPreset.create({
+      data: {
+        mapId: null,
+        name,
+        color: this.normalizeHexColor(body?.color, '#eab308'),
+        tier: String(body?.tier ?? '').trim() || null,
+        effort: this.toNullableIntMin(body?.effort, 0),
+        space: this.toNullableIntMin(body?.space, 0),
+        description: String(body?.description ?? '').trim() || null,
+        placementRules: this.normalizePlacementRulesInput(body?.placementRules),
+        buildCost: this.normalizeResourceCostsInput(body?.buildCost),
+        researchCost: this.normalizeResourceCostsInput(body?.researchCost),
+        upkeep: this.normalizeUpkeepInput(body?.upkeep),
+        effects: this.normalizeEffectsInput(body?.effects),
+      },
+    });
+    return this.toBuildingPresetRow(row);
+  }
+
+  async updateSharedBuildingPreset(
+    user: AuthUser,
+    presetId: string,
+    body: UpsertBuildingPresetBody,
+  ): Promise<WorldMapBuildingPresetRow> {
+    this.requireAdmin(user);
+    const current = await this.prisma.worldMapBuildingPreset.findUnique({
+      where: { id: presetId },
+    });
+    if (!current || current.mapId !== null) {
+      throw new NotFoundException('shared building preset not found');
+    }
+    const data: Record<string, unknown> = {};
+    if (body.name !== undefined) {
+      const name = String(body.name ?? '').trim();
+      if (!name) throw new BadRequestException('building preset name required');
+      data.name = name;
+    }
+    if (body.color !== undefined) data.color = this.normalizeHexColor(body.color, '#eab308');
+    if (body.tier !== undefined) data.tier = String(body.tier ?? '').trim() || null;
+    if (body.effort !== undefined) data.effort = this.toNullableIntMin(body.effort, 0);
+    if (body.space !== undefined) data.space = this.toNullableIntMin(body.space, 0);
+    if (body.description !== undefined) {
+      data.description = String(body.description ?? '').trim() || null;
+    }
+    if (body.placementRules !== undefined) {
+      data.placementRules = this.normalizePlacementRulesInput(body.placementRules);
+    }
+    if (body.buildCost !== undefined) {
+      data.buildCost = this.normalizeResourceCostsInput(body.buildCost);
+    }
+    if (body.researchCost !== undefined) {
+      data.researchCost = this.normalizeResourceCostsInput(body.researchCost);
+    }
+    if (body.upkeep !== undefined) {
+      data.upkeep = this.normalizeUpkeepInput(body.upkeep);
+    }
+    if (body.effects !== undefined) {
+      data.effects = this.normalizeEffectsInput(body.effects);
+    }
+    const row = await this.prisma.worldMapBuildingPreset.update({
+      where: { id: presetId },
+      data,
+    });
+    return this.toBuildingPresetRow(row);
+  }
+
+  async deleteSharedBuildingPreset(user: AuthUser, presetId: string) {
+    this.requireAdmin(user);
+    const current = await this.prisma.worldMapBuildingPreset.findUnique({
+      where: { id: presetId },
+      select: { id: true, mapId: true },
+    });
+    if (!current || current.mapId !== null) {
+      throw new NotFoundException('shared building preset not found');
+    }
+    await this.prisma.worldMapBuildingPreset.delete({ where: { id: presetId } });
+    return { ok: true };
+  }
+
   async create(user: AuthUser, name: string): Promise<PublicWorldMap> {
     const trimmed = name.trim();
     if (!trimmed) throw new BadRequestException('map name required');
@@ -426,7 +613,7 @@ export class WorldMapsService implements OnModuleInit {
   async listBuildingPresets(user: AuthUser, mapId: string): Promise<WorldMapBuildingPresetRow[]> {
     await this.requireReadable(user, mapId);
     const rows = await this.prisma.worldMapBuildingPreset.findMany({
-      where: { mapId },
+      where: { OR: [{ mapId }, { mapId: null }] },
       orderBy: [{ name: 'asc' }, { createdAt: 'asc' }],
     });
     return rows.map((row) => this.toBuildingPresetRow(row));
@@ -541,7 +728,7 @@ export class WorldMapsService implements OnModuleInit {
     const presetId = String(body?.presetId ?? '').trim();
     if (!presetId) throw new BadRequestException('presetId required');
     const preset = await this.prisma.worldMapBuildingPreset.findUnique({ where: { id: presetId } });
-    if (!preset || preset.mapId !== map.id) {
+    if (!preset || (preset.mapId !== map.id && preset.mapId !== null)) {
       throw new BadRequestException('invalid presetId');
     }
     const col = this.toInt(body?.col, 'col', 0, Math.max(0, map.cols - 1));
@@ -967,7 +1154,7 @@ export class WorldMapsService implements OnModuleInit {
     if (!mapRow) throw new NotFoundException('world map not found');
 
     const presetRows = await this.prisma.worldMapBuildingPreset.findMany({
-      where: { mapId },
+      where: { OR: [{ mapId }, { mapId: null }] },
     });
     const presetById = new Map(
       presetRows.map((row) => {
@@ -1301,7 +1488,7 @@ export class WorldMapsService implements OnModuleInit {
     const placementRules = Array.isArray(preset.placementRules) ? preset.placementRules : [];
     if (placementRules.length === 0) return [] as string[];
     const presetRows = await this.prisma.worldMapBuildingPreset.findMany({
-      where: { mapId: mapRow.id },
+      where: { OR: [{ mapId: mapRow.id }, { mapId: null }] },
     });
     const presetById = new Map(
       presetRows.map((entry) => {
@@ -2806,6 +2993,19 @@ export class WorldMapsService implements OnModuleInit {
     const d = new Date(String(value));
     if (Number.isNaN(d.getTime())) return null;
     return d;
+  }
+
+  private toSharedTilePresetRow(row: any): MapTileStatePreset {
+    return {
+      id: String(row?.id ?? '').trim(),
+      name: String(row?.name ?? '').trim(),
+      color: this.normalizeHexColor(row?.color, '#e5e7eb'),
+      hasValue: !!row?.hasValue,
+    };
+  }
+
+  private requireAdmin(user: AuthUser) {
+    if (!user?.isAdmin) throw new ForbiddenException('forbidden');
   }
 
   private normalizeTilePresetsInput(input: unknown): MapTileStatePreset[] {

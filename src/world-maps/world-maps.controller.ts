@@ -34,6 +34,12 @@ type CreateWorldMapBody = {
   name?: string;
 };
 
+type SharedTilePresetBody = {
+  name?: string;
+  color?: string;
+  hasValue?: boolean;
+};
+
 type UpdateWorldMapBody = {
   name?: string;
   imageWidth?: number | null;
@@ -114,6 +120,54 @@ export class WorldMapsController {
   @Get()
   list(@Req() req: AuthRequest) {
     return this.worldMaps.list(req.user);
+  }
+
+  @Get('shared/tile-presets')
+  listSharedTilePresets(@Req() req: AuthRequest) {
+    return this.worldMaps.listSharedTilePresets(req.user);
+  }
+
+  @Post('shared/tile-presets')
+  createSharedTilePreset(@Req() req: AuthRequest, @Body() body: SharedTilePresetBody) {
+    return this.worldMaps.createSharedTilePreset(req.user, body);
+  }
+
+  @Patch('shared/tile-presets/:presetId')
+  updateSharedTilePreset(
+    @Req() req: AuthRequest,
+    @Param('presetId') presetId: string,
+    @Body() body: SharedTilePresetBody,
+  ) {
+    return this.worldMaps.updateSharedTilePreset(req.user, presetId, body);
+  }
+
+  @Delete('shared/tile-presets/:presetId')
+  deleteSharedTilePreset(@Req() req: AuthRequest, @Param('presetId') presetId: string) {
+    return this.worldMaps.deleteSharedTilePreset(req.user, presetId);
+  }
+
+  @Get('shared/building-presets')
+  listSharedBuildingPresets(@Req() req: AuthRequest) {
+    return this.worldMaps.listSharedBuildingPresets(req.user);
+  }
+
+  @Post('shared/building-presets')
+  createSharedBuildingPreset(@Req() req: AuthRequest, @Body() body: UpsertBuildingPresetBody) {
+    return this.worldMaps.createSharedBuildingPreset(req.user, body);
+  }
+
+  @Patch('shared/building-presets/:presetId')
+  updateSharedBuildingPreset(
+    @Req() req: AuthRequest,
+    @Param('presetId') presetId: string,
+    @Body() body: UpsertBuildingPresetBody,
+  ) {
+    return this.worldMaps.updateSharedBuildingPreset(req.user, presetId, body);
+  }
+
+  @Delete('shared/building-presets/:presetId')
+  deleteSharedBuildingPreset(@Req() req: AuthRequest, @Param('presetId') presetId: string) {
+    return this.worldMaps.deleteSharedBuildingPreset(req.user, presetId);
   }
 
   @Get(':id')

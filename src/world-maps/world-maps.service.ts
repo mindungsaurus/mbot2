@@ -26,6 +26,7 @@ import type {
   MapTileStateAssignment,
   MapTileStatePreset,
   MapTileRegionState,
+  MapTileMemoMap,
   PopulationId,
   PopulationTrackedId,
   UpkeepPopulationId,
@@ -59,6 +60,7 @@ type UpdateWorldMapBody = {
   tileStatePresets?: MapTileStatePreset[];
   tileStateAssignments?: Record<string, MapTileStateAssignment[]>;
   tileRegionStates?: Record<string, MapTileRegionState>;
+  tileMemos?: Record<string, string>;
   buildingPresets?: BuildingPreset[];
 };
 
@@ -134,6 +136,7 @@ type RuntimeContext = {
   cols: number;
   rows: number;
   overflowTracker?: OverflowConversionTracker;
+  deferCappedResourceOverflow?: boolean;
 };
 
 type PredicateEvalResult = {
@@ -599,6 +602,7 @@ export class WorldMapsService implements OnModuleInit {
         tileStatePresets: [],
         tileStateAssignments: {},
         tileRegionStates: {},
+        tileMemos: {},
         buildingPresets: [],
       },
     });
@@ -669,6 +673,9 @@ export class WorldMapsService implements OnModuleInit {
     }
     if (body.tileRegionStates !== undefined) {
       data.tileRegionStates = this.normalizeTileRegionStatesInput(body.tileRegionStates);
+    }
+    if (body.tileMemos !== undefined) {
+      data.tileMemos = this.normalizeTileMemosInput(body.tileMemos);
     }
     if (body.buildingPresets !== undefined) {
       data.buildingPresets = this.normalizeBuildingPresetsInput(body.buildingPresets);
@@ -1168,6 +1175,10 @@ export class WorldMapsService implements OnModuleInit {
       appliedRules: 0,
       appliedActions: 0,
       failedRules: 0,
+      foodRequired: 0,
+      foodConsumed: 0,
+      foodDeficit: 0,
+      foodGoldSpent: 0,
       day: 0,
       logs: [] as RuleExecutionLog[],
       overflowConvertedGold: 0,
@@ -1184,6 +1195,18 @@ export class WorldMapsService implements OnModuleInit {
         appliedRules: summary.appliedRules + iter.appliedRules,
         appliedActions: summary.appliedActions + iter.appliedActions,
         failedRules: summary.failedRules + iter.failedRules,
+        foodRequired:
+          summary.foodRequired +
+          Math.max(0, Math.trunc(Number(iter.foodRequired ?? 0) || 0)),
+        foodConsumed:
+          summary.foodConsumed +
+          Math.max(0, Math.trunc(Number(iter.foodConsumed ?? 0) || 0)),
+        foodDeficit:
+          summary.foodDeficit +
+          Math.max(0, Math.trunc(Number(iter.foodDeficit ?? 0) || 0)),
+        foodGoldSpent:
+          summary.foodGoldSpent +
+          Math.max(0, Math.trunc(Number(iter.foodGoldSpent ?? 0) || 0)),
         day: iter.day,
         logs: [...summary.logs, ...iter.logs].slice(-500),
         overflowConvertedGold:
@@ -1228,6 +1251,10 @@ export class WorldMapsService implements OnModuleInit {
           appliedRules: summary.appliedRules,
           appliedActions: summary.appliedActions,
           failedRules: summary.failedRules,
+          foodRequired: summary.foodRequired,
+          foodConsumed: summary.foodConsumed,
+          foodDeficit: summary.foodDeficit,
+          foodGoldSpent: summary.foodGoldSpent,
           day: summary.day,
           logs: summary.logs,
           overflowConvertedGold: summary.overflowConvertedGold,
@@ -1343,6 +1370,7 @@ export class WorldMapsService implements OnModuleInit {
           cols: mapRow.cols,
           rows: mapRow.rows,
           overflowTracker,
+          deferCappedResourceOverflow: event === 'daily',
         };
         const pred = rule.when
           ? this.evaluateRulePredicateDetailed(rule.when, ctx)
@@ -1422,6 +1450,12 @@ export class WorldMapsService implements OnModuleInit {
       }
     >();
     const activateNow = new Set<string>();
+    let foodConsumption = {
+      requiredFood: 0,
+      consumedFood: 0,
+      deficitFood: 0,
+      goldSpent: 0,
+    };
 
     if (event === 'daily') {
       for (const origin of instances.filter((entry) => entry.enabled)) {
@@ -1534,7 +1568,8 @@ export class WorldMapsService implements OnModuleInit {
     // Population consumes food once per day. If food is insufficient,
     // spend gold by configured foodDeficitGoldRate for the deficit amount.
     if (event === 'daily') {
-      this.applyPopulationFoodConsumption(cityGlobal);
+      foodConsumption = this.applyPopulationFoodConsumption(cityGlobal);
+      this.finalizeDeferredCappedResourceOverflow(cityGlobal, overflowTracker);
     }
 
     if (instancePatchById.size > 0) {
@@ -1573,6 +1608,22 @@ export class WorldMapsService implements OnModuleInit {
       appliedRules,
       appliedActions,
       failedRules,
+      foodRequired: Math.max(
+        0,
+        Math.trunc(Number(foodConsumption.requiredFood ?? 0) || 0),
+      ),
+      foodConsumed: Math.max(
+        0,
+        Math.trunc(Number(foodConsumption.consumedFood ?? 0) || 0),
+      ),
+      foodDeficit: Math.max(
+        0,
+        Math.trunc(Number(foodConsumption.deficitFood ?? 0) || 0),
+      ),
+      foodGoldSpent: Math.max(
+        0,
+        Math.trunc(Number(foodConsumption.goldSpent ?? 0) || 0),
+      ),
       logs,
       overflowConvertedGold: Math.max(0, Math.trunc(Number(overflowTracker.convertedGold || 0))),
       overflowBeforeGold: overflowTracker.beforeGold,
@@ -1816,7 +1867,15 @@ export class WorldMapsService implements OnModuleInit {
       const current = this.getBuildingResourceAmount(ctx.cityGlobal, resourceId);
       let next = current + delta;
       if (next < 0) next = 0;
-      if (this.isBaseResourceId(resourceId) && CAPPED_RESOURCE_SET.has(resourceId)) {
+      const shouldDeferOverflow =
+        !!ctx.deferCappedResourceOverflow &&
+        this.isBaseResourceId(resourceId) &&
+        CAPPED_RESOURCE_SET.has(resourceId);
+      if (
+        !shouldDeferOverflow &&
+        this.isBaseResourceId(resourceId) &&
+        CAPPED_RESOURCE_SET.has(resourceId)
+      ) {
         const cap = ctx.cityGlobal.caps[resourceId] ?? 0;
         if (next > cap) {
           const overflow = Math.max(0, next - cap);
@@ -2082,6 +2141,41 @@ export class WorldMapsService implements OnModuleInit {
       deficitFood,
       goldSpent,
     };
+  }
+
+  private finalizeDeferredCappedResourceOverflow(
+    cityGlobal: CityGlobalState,
+    tracker?: OverflowConversionTracker,
+  ) {
+    for (const resourceId of CAPPED_RESOURCE_IDS) {
+      const current = Math.max(0, Math.trunc(Number(cityGlobal.values[resourceId] ?? 0) || 0));
+      const cap = Math.max(0, Math.trunc(Number(cityGlobal.caps[resourceId] ?? 0) || 0));
+      if (current <= cap) {
+        cityGlobal.values[resourceId] = current;
+        continue;
+      }
+      const overflow = Math.max(0, current - cap);
+      cityGlobal.values[resourceId] = cap;
+
+      const rate = Math.max(0, Math.trunc(Number(cityGlobal.overflowToGold?.[resourceId] ?? 0) || 0));
+      if (overflow <= 0 || rate <= 0) continue;
+
+      const currentGold = Math.max(0, Math.trunc(Number(cityGlobal.values.gold ?? 0) || 0));
+      const goldGain = overflow * rate;
+      const nextGold = currentGold + goldGain;
+      cityGlobal.values.gold = nextGold;
+
+      if (tracker) {
+        if (tracker.beforeGold == null) tracker.beforeGold = currentGold;
+        tracker.afterGold = nextGold;
+        tracker.convertedGold += goldGain;
+        const prev = tracker.details[resourceId] ?? { overflowAmount: 0, goldGain: 0 };
+        tracker.details[resourceId] = {
+          overflowAmount: prev.overflowAmount + overflow,
+          goldGain: prev.goldGain + goldGain,
+        };
+      }
+    }
   }
 
   private extractAssignedWorkersByTypeFromMeta(
@@ -2603,6 +2697,7 @@ export class WorldMapsService implements OnModuleInit {
         this.normalizeTilePresetsInput(row.tileStatePresets),
       ),
       tileRegionStates: this.normalizeTileRegionStatesInput(row.tileRegionStates),
+      tileMemos: this.normalizeTileMemosInput(row.tileMemos),
       buildingPresets: this.normalizeBuildingPresetsInput(row.buildingPresets),
       createdAt:
         row.createdAt instanceof Date
@@ -3133,6 +3228,7 @@ export class WorldMapsService implements OnModuleInit {
       tileStatePresets: presets,
       tileStateAssignments: assignments,
       tileRegionStates: this.normalizeTileRegionStatesInput(src.tileRegionStates),
+      tileMemos: this.normalizeTileMemosInput(src.tileMemos),
       buildingPresets: this.normalizeBuildingPresetsInput(src.buildingPresets),
       ...(createdAt ? { createdAt } : {}),
       ...(updatedAt ? { updatedAt } : {}),
@@ -3254,6 +3350,20 @@ export class WorldMapsService implements OnModuleInit {
       }
     }
 
+    return out;
+  }
+
+  private normalizeTileMemosInput(input: unknown): MapTileMemoMap {
+    const src = input as Record<string, unknown>;
+    if (!src || typeof src !== 'object') return {};
+    const out: MapTileMemoMap = {};
+    for (const [key, value] of Object.entries(src)) {
+      const tileKey = String(key ?? '').trim();
+      if (!tileKey) continue;
+      const text = String(value ?? '').trim();
+      if (!text) continue;
+      out[tileKey] = text;
+    }
     return out;
   }
 

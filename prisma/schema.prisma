@@ -239,6 +239,7 @@ model WorldMap {
   tileStatePresets     Json?
   tileStateAssignments Json?
   tileRegionStates     Json?
+  tileMemos            Json?
   buildingPresets      Json?
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt

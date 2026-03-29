@@ -54,6 +54,7 @@ type UpdateWorldMapBody = {
   tileStatePresets?: MapTileStatePreset[];
   tileStateAssignments?: Record<string, MapTileStateAssignment[]>;
   tileRegionStates?: Record<string, MapTileRegionState>;
+  tileMemos?: Record<string, string>;
   buildingPresets?: BuildingPreset[];
 };
 

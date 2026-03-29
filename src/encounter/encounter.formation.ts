@@ -243,7 +243,7 @@ export function buildDistanceMarkLines(
     getCell(u.pos.z, u.pos.x).push({ unit: u, label: baseLabel });
   }
 
-  const zs = Array.from(byZ.keys()).sort((a, b) => a - b);
+  const zs = Array.from(byZ.keys()).sort((a, b) => b - a);
   const lines: string[] = [];
   const planarMode = !!opts?.planarMode;
 

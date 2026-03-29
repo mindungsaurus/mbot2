@@ -240,6 +240,7 @@ const DEFAULT_CITY_GLOBAL: CityGlobalState = {
     weave: 0,
     food: 0,
   },
+  foodDeficitGoldRate: 0,
   warehouse: {},
   day: 0,
   satisfaction: 0,
@@ -1530,6 +1531,12 @@ export class WorldMapsService implements OnModuleInit {
       }
     }
 
+    // Population consumes food once per day. If food is insufficient,
+    // spend gold by configured foodDeficitGoldRate for the deficit amount.
+    if (event === 'daily') {
+      this.applyPopulationFoodConsumption(cityGlobal);
+    }
+
     if (instancePatchById.size > 0) {
       for (const [instanceId, patch] of instancePatchById.entries()) {
         const data: Prisma.WorldMapBuildingInstanceUpdateInput = {};
@@ -2042,6 +2049,39 @@ export class WorldMapsService implements OnModuleInit {
       Math.max(0, population.scholars?.available ?? 0) +
       Math.max(0, population.laborers?.available ?? 0)
     );
+  }
+
+  private applyPopulationFoodConsumption(cityGlobal: CityGlobalState) {
+    const requiredFood = Math.max(0, this.getTotalPopulation(cityGlobal.population));
+    if (requiredFood <= 0) {
+      return {
+        requiredFood: 0,
+        consumedFood: 0,
+        deficitFood: 0,
+        goldSpent: 0,
+      };
+    }
+    const currentFood = Math.max(0, Math.trunc(Number(cityGlobal.values.food ?? 0) || 0));
+    const consumedFood = Math.min(currentFood, requiredFood);
+    const deficitFood = Math.max(0, requiredFood - consumedFood);
+    cityGlobal.values.food = Math.max(0, currentFood - consumedFood);
+
+    let goldSpent = 0;
+    if (deficitFood > 0) {
+      const rate = Math.max(0, Math.trunc(Number(cityGlobal.foodDeficitGoldRate ?? 0) || 0));
+      if (rate > 0) {
+        const currentGold = Math.max(0, Math.trunc(Number(cityGlobal.values.gold ?? 0) || 0));
+        const needGold = Math.max(0, deficitFood * rate);
+        goldSpent = Math.min(currentGold, needGold);
+        cityGlobal.values.gold = Math.max(0, currentGold - goldSpent);
+      }
+    }
+    return {
+      requiredFood,
+      consumedFood,
+      deficitFood,
+      goldSpent,
+    };
   }
 
   private extractAssignedWorkersByTypeFromMeta(
@@ -3276,6 +3316,7 @@ export class WorldMapsService implements OnModuleInit {
     const valuesIn = input?.values ?? {};
     const capsIn = input?.caps ?? {};
     const overflowToGoldIn = input?.overflowToGold ?? {};
+    const foodDeficitGoldRateIn = input?.foodDeficitGoldRate;
     const dayIn = input?.day;
     const satisfactionIn = input?.satisfaction;
     const populationIn = input?.population ?? {};
@@ -3358,6 +3399,10 @@ export class WorldMapsService implements OnModuleInit {
         weave: toIntSafe(overflowToGoldIn.weave, DEFAULT_CITY_GLOBAL.overflowToGold.weave),
         food: toIntSafe(overflowToGoldIn.food, DEFAULT_CITY_GLOBAL.overflowToGold.food),
       },
+      foodDeficitGoldRate: toIntSafe(
+        foodDeficitGoldRateIn,
+        DEFAULT_CITY_GLOBAL.foodDeficitGoldRate,
+      ),
       warehouse: (() => {
         const out: Record<string, number> = {};
         for (const [nameRaw, amountRaw] of Object.entries(warehouseIn)) {

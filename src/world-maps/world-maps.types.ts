@@ -27,6 +27,7 @@ export type CityGlobalState = {
   values: Record<ResourceId, number>;
   caps: Record<CappedResourceId, number>;
   overflowToGold: Record<CappedResourceId, number>;
+  foodDeficitGoldRate: number;
   warehouse?: Record<string, number>;
   day: number;
   satisfaction: number;

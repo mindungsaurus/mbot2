@@ -173,8 +173,8 @@ export function buildFormationLines(
     }
   }
 
-  // z 오름차순으로 라인 생성
-  const zs = Array.from(byZ.keys()).sort((a, b) => a - b);
+  // z 내림차순으로 라인 생성 (고층 -> 저층)
+  const zs = Array.from(byZ.keys()).sort((a, b) => b - a);
   const lines: string[] = [];
   const showFloor = zs.length > 1;
 

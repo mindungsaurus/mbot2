@@ -2789,7 +2789,12 @@ export class WorldMapsService implements OnModuleInit {
       if (kind === 'requireTagInRange') {
         const tagPresetId = String((entry as any).tagPresetId ?? '').trim();
         if (!tagPresetId) continue;
-        const distance = this.toNullableIntMin((entry as any).distance, 0) ?? 1;
+        const hasDistance = Object.prototype.hasOwnProperty.call(
+          entry as Record<string, unknown>,
+          'distance',
+        );
+        const parsedDistance = this.toNullableIntMin((entry as any).distance, 0);
+        const distance = parsedDistance ?? (hasDistance ? 0 : 1);
         const minCount = this.toNullableIntMin((entry as any).minCount, 0) ?? undefined;
         const negate = !!(entry as any).negate;
         const repeat = !!(entry as any).repeat;
@@ -2814,7 +2819,12 @@ export class WorldMapsService implements OnModuleInit {
       if (kind === 'requireBuildingInRange') {
         const presetId = String((entry as any).presetId ?? '').trim();
         if (!presetId) continue;
-        const distance = this.toNullableIntMin((entry as any).distance, 0) ?? 1;
+        const hasDistance = Object.prototype.hasOwnProperty.call(
+          entry as Record<string, unknown>,
+          'distance',
+        );
+        const parsedDistance = this.toNullableIntMin((entry as any).distance, 0);
+        const distance = parsedDistance ?? (hasDistance ? 0 : 1);
         const minCount = this.toNullableIntMin((entry as any).minCount, 0) ?? undefined;
         const negate = !!(entry as any).negate;
         const repeat = !!(entry as any).repeat;

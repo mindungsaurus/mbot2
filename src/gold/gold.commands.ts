@@ -71,6 +71,34 @@ export class GoldCommands {
   }
 
   @SlashCommand({
+    name: 'rtaunt',
+    description: `ha-ha`,
+    guilds: ['1284642997375336592', '1273347630767804539'],
+  })
+  public async onRtaunt(@Context() [interaction]: SlashCommandContext) {
+    const messages = [
+      `그냥 네가 못한 게 아닐까?`,
+      `인지 편향임, 진정해`,
+      `아 이걸 굳이?`,
+      `여기서? 흠..`,
+      `나는 그거 아닌 것 같은데..`,
+      `뭐 어쩌겠음 다이스가 그렇게 떴는데`,
+      `근데 솔직히 본인이 선택한 거 아녜요?`,
+      `되게 신박한 생각을 하네;`,
+      `난 모르겠다~ 어차피 내 일 아니고`,
+      `이건 좀..`,
+      `나한테 씅낸다고 뭐 안 바뀜..`,
+      `나같으면.. 쩝.. 아니다~`,
+    ];
+
+    const randomMessage = messages[Math.floor(Math.random() * messages.length)];
+
+    return interaction.reply({
+      content: randomMessage,
+    });
+  }
+
+  @SlashCommand({
     name: 'register',
     description: 'register pc or npc to the DB',
     guilds: ['1284642997375336592', '1273347630767804539'],

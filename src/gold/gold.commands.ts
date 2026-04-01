@@ -89,6 +89,7 @@ export class GoldCommands {
       `이건 좀..`,
       `나한테 씅낸다고 뭐 안 바뀜..`,
       `나같으면.. 쩝.. 아니다~`,
+      `뭐 게임 못하는 게 잘못은 아니긴 합니다..`,
     ];
 
     const randomMessage = messages[Math.floor(Math.random() * messages.length)];

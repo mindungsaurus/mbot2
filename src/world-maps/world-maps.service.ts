@@ -2465,7 +2465,10 @@ export class WorldMapsService implements OnModuleInit {
   }
 
   private toAxial(col: number, row: number, orientation: HexOrientation): [number, number] {
-    if (orientation === 'flat') {
+    // Keep this mapping aligned with frontend hexDistanceByOrientation:
+    // - pointy => odd-r offset
+    // - flat   => odd-q offset
+    if (orientation === 'pointy') {
       const q = col - Math.floor((row - (row & 1)) / 2);
       const r = row;
       return [q, r];

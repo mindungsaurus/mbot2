@@ -1971,7 +1971,10 @@ export class WorldMapsService implements OnModuleInit {
         if (col === null || row === null) continue;
         const current = this.getTileRegionState(ctx, col, row);
         const field = action.field;
-        const next = Math.max(0, Math.trunc(Number(current[field] ?? 0) + delta));
+        const base = Math.trunc(Number(current[field] ?? 0) || 0);
+        const rawNext = Math.trunc(base + delta);
+        const next =
+          field === 'threat' ? rawNext : Math.max(0, rawNext);
         current[field] = next;
         ctx.tileRegions[key] = current;
         changed = changed || delta !== 0;
@@ -2376,7 +2379,8 @@ export class WorldMapsService implements OnModuleInit {
       spaceUsed: Math.max(0, Math.trunc(Number(state.spaceUsed ?? 0))),
       spaceCap: Math.max(0, Math.trunc(Number(state.spaceCap ?? 0))),
       satisfaction: Math.max(0, Math.trunc(Number(state.satisfaction ?? 0))),
-      threat: Math.max(0, Math.trunc(Number(state.threat ?? 0))),
+      // Keep signed threat internally to avoid intermediate-clamp data loss.
+      threat: Math.trunc(Number(state.threat ?? 0) || 0),
       pollution: Math.max(0, Math.trunc(Number(state.pollution ?? 0))),
     };
   }
@@ -2790,6 +2794,13 @@ export class WorldMapsService implements OnModuleInit {
     return Math.max(min, n);
   }
 
+  private toNullableInt(value: unknown): number | null {
+    if (value === null || value === undefined || String(value).trim() === '') return null;
+    const n = Math.trunc(Number(value));
+    if (!Number.isFinite(n)) return null;
+    return n;
+  }
+
   private toPlainRecord(value: unknown): Record<string, unknown> | undefined {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
     return value as Record<string, unknown>;
@@ -2917,7 +2928,7 @@ export class WorldMapsService implements OnModuleInit {
           opRaw === 'lte'
             ? opRaw
             : 'gte';
-        const value = this.toNullableIntMin((entry as any).value, 0) ?? 0;
+        const value = this.toNullableInt((entry as any).value) ?? 0;
         out.push({ kind: 'tileRegionCompare', field, op, value });
         continue;
       }

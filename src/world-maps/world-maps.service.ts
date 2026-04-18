@@ -90,6 +90,7 @@ type UpsertBuildingPresetBody = {
     | {
         onBuild?: BuildingExecutionRule[];
         daily?: BuildingExecutionRule[];
+        sustain?: BuildingExecutionRule[];
         onRemove?: BuildingExecutionRule[];
       }
     | null;
@@ -131,6 +132,7 @@ type RuntimeContext = {
   cityGlobal: CityGlobalState;
   tileStates: Record<string, MapTileStateAssignment[]>;
   tileRegions: Record<string, MapTileRegionState>;
+  troopsDeployedByTile?: Record<string, Record<string, number>>;
   instances: RuntimeInstance[];
   orientation: HexOrientation;
   cols: number;
@@ -150,7 +152,7 @@ type RuleExecutionLog = {
   instanceId: string;
   presetId: string;
   presetName: string;
-  event: 'onBuild' | 'onRemove' | 'daily';
+  event: 'onBuild' | 'onRemove' | 'daily' | 'sustain';
   ruleId: string;
   status: RuleExecutionStatus;
   reason?: string;
@@ -217,6 +219,7 @@ const TRACKED_WORKER_POPULATION_IDS: PopulationTrackedId[] = [
   'scholars',
   'laborers',
 ];
+const TROOP_STATE_MEMO_KEY = '__sys_troops_state__';
 
 const DEFAULT_CITY_GLOBAL: CityGlobalState = {
   values: {
@@ -389,7 +392,7 @@ export class WorldMapsService implements OnModuleInit {
 
   async list(user: AuthUser): Promise<PublicWorldMap[]> {
     const rows = await this.prisma.worldMap.findMany({
-      where: user.isAdmin ? {} : { ownerId: user.id },
+      where: {},
       orderBy: { name: 'asc' },
     });
     return rows.map((row) => this.toPublic(row));
@@ -1276,7 +1279,7 @@ export class WorldMapsService implements OnModuleInit {
 
   private async applyBuildingEventEffects(
     mapId: string,
-    event: 'onBuild' | 'onRemove' | 'daily',
+    event: 'onBuild' | 'onRemove' | 'daily' | 'sustain',
     targetInstanceIds?: string[],
     advanceDay = false,
   ) {
@@ -1308,12 +1311,13 @@ export class WorldMapsService implements OnModuleInit {
       this.normalizeTilePresetsInput(mapRow.tileStatePresets),
     );
     let tileRegions = this.normalizeTileRegionStatesInput(mapRow.tileRegionStates);
+    const troopsDeployedByTile = this.parseTroopsDeployedByTileFromTileMemos(mapRow.tileMemos);
 
     const targetSet = new Set(targetInstanceIds ?? []);
 
     const runRulesForOrigin = (
       origin: RuntimeInstance,
-      eventKind: 'onBuild' | 'onRemove' | 'daily',
+      eventKind: 'onBuild' | 'onRemove' | 'daily' | 'sustain',
       options?: { skipDailyUpkeep?: boolean },
     ) => {
       const effects = origin.preset?.effects;
@@ -1340,7 +1344,9 @@ export class WorldMapsService implements OnModuleInit {
           ? effects.onBuild ?? []
           : eventKind === 'onRemove'
             ? effects.onRemove ?? []
-            : effects.daily ?? [];
+            : eventKind === 'sustain'
+              ? effects.sustain ?? []
+              : effects.daily ?? [];
       if (!Array.isArray(rules) || rules.length === 0) return;
 
       for (const rule of rules) {
@@ -1365,6 +1371,7 @@ export class WorldMapsService implements OnModuleInit {
           cityGlobal,
           tileStates,
           tileRegions,
+          troopsDeployedByTile,
           instances,
           orientation,
           cols: mapRow.cols,
@@ -1557,6 +1564,9 @@ export class WorldMapsService implements OnModuleInit {
 
     for (const origin of targets) {
       runRulesForOrigin(origin, event);
+      // NOTE:
+      // sustain rules are runtime/derived effects and must not be persisted
+      // into tile state on build-time event execution.
     }
 
     if (event === 'daily' && activateNow.size > 0) {
@@ -1725,6 +1735,13 @@ export class WorldMapsService implements OnModuleInit {
         ? `거리 ${distance} 내 건물 부정 조건 실패(${rule.presetId})`
         : `거리 ${distance} 내 건물 조건 실패(${rule.presetId}, 최소 ${minCount})`;
     }
+    if (rule.kind === 'requireTroopInRange') {
+      const distance = Math.max(0, Math.trunc(Number(rule.distance ?? 1) || 0));
+      const minCount = Math.max(1, Math.trunc(Number(rule.minCount ?? 1) || 1));
+      return rule.negate
+        ? `거리 ${distance} 내 병력 부정 조건 실패(${rule.presetId})`
+        : `거리 ${distance} 내 병력 조건 실패(${rule.presetId}, 최소 ${minCount})`;
+    }
     if (rule.kind === 'custom') return `사용자 조건 실패(${rule.label})`;
     return '배치 조건 실패';
   }
@@ -1852,6 +1869,24 @@ export class WorldMapsService implements OnModuleInit {
         reason: `${predicate.negate ? '부정 ' : ''}거리 내 건물(${predicate.presetId})`,
       };
     }
+    if (predicate.kind === 'requireTroopInRange') {
+      const distance = Math.max(0, Math.trunc(Number(predicate.distance ?? 1) || 0));
+      const minCount = Math.max(1, Math.trunc(Number(predicate.minCount ?? 1) || 1));
+      const troop = this.countTroopsInRange(ctx, predicate.presetId, distance);
+      const totalTiles = this.getTargetTileCountByDistance(ctx, distance);
+      const matchedRaw = troop.units >= minCount;
+      const matched = predicate.negate ? !matchedRaw : matchedRaw;
+      const repeatCount = predicate.repeat
+        ? predicate.negate
+          ? Math.max(0, totalTiles - troop.tiles)
+          : Math.max(0, troop.units)
+        : 1;
+      return {
+        matched,
+        repeatCount: Math.max(1, repeatCount || 1),
+        reason: `${predicate.negate ? '부정 ' : ''}거리 내 병력(${predicate.presetId})`,
+      };
+    }
     if (predicate.kind === 'custom') {
       return { matched: true, repeatCount: 1, reason: `사용자 조건(${predicate.label})` };
     }
@@ -1964,7 +1999,12 @@ export class WorldMapsService implements OnModuleInit {
     }
     if (action.kind === 'adjustTileRegion') {
       const delta = Math.trunc(this.evalRuleExpr(action.delta, ctx));
-      const targets = this.resolveActionTargetTiles(ctx, action.target, action.distance);
+      const targets = this.resolveActionTargetTiles(
+        ctx,
+        action.target,
+        action.distance,
+        !!(action as any).excludeSelf,
+      );
       let changed = false;
       for (const key of targets) {
         const [col, row] = this.parseTileKey(key);
@@ -1982,7 +2022,12 @@ export class WorldMapsService implements OnModuleInit {
       return changed;
     }
     if (action.kind === 'addTileState') {
-      const targets = this.resolveActionTargetTiles(ctx, action.target, action.distance);
+      const targets = this.resolveActionTargetTiles(
+        ctx,
+        action.target,
+        action.distance,
+        !!(action as any).excludeSelf,
+      );
       let changed = false;
       for (const key of targets) {
         const current = Array.isArray(ctx.tileStates[key]) ? [...ctx.tileStates[key]] : [];
@@ -2006,7 +2051,12 @@ export class WorldMapsService implements OnModuleInit {
       return changed;
     }
     if (action.kind === 'removeTileState') {
-      const targets = this.resolveActionTargetTiles(ctx, action.target, action.distance);
+      const targets = this.resolveActionTargetTiles(
+        ctx,
+        action.target,
+        action.distance,
+        !!(action as any).excludeSelf,
+      );
       let changed = false;
       for (const key of targets) {
         const current = Array.isArray(ctx.tileStates[key]) ? [...ctx.tileStates[key]] : [];
@@ -2422,6 +2472,26 @@ export class WorldMapsService implements OnModuleInit {
     }).length;
   }
 
+  private countTroopsInRange(ctx: RuntimeContext, presetId: string, distance: number) {
+    if (!presetId) return { units: 0, tiles: 0 };
+    const deployedByTile = ctx.troopsDeployedByTile ?? {};
+    const maxDistance = Math.max(0, distance);
+    let units = 0;
+    let tiles = 0;
+    for (const [key, byPresetRaw] of Object.entries(deployedByTile)) {
+      const [col, row] = this.parseTileKey(key);
+      if (col == null || row == null) continue;
+      if (this.hexDistance(ctx.origin.col, ctx.origin.row, col, row, ctx.orientation) > maxDistance)
+        continue;
+      const byPreset = this.toPlainRecord(byPresetRaw) ?? {};
+      const qty = Math.max(0, Math.trunc(Number(byPreset[presetId] ?? 0) || 0));
+      if (qty <= 0) continue;
+      units += qty;
+      tiles += 1;
+    }
+    return { units, tiles };
+  }
+
   private getTargetTileCountByDistance(ctx: RuntimeContext, distance: number) {
     return this.resolveTargetTilesByDistance(ctx, Math.max(0, distance)).length;
   }
@@ -2430,8 +2500,17 @@ export class WorldMapsService implements OnModuleInit {
     ctx: RuntimeContext,
     target: 'self' | 'range' | undefined,
     distance: number | undefined,
+    excludeSelf = false,
   ) {
-    if (target === 'range') return this.resolveTargetTilesByDistance(ctx, Math.max(0, Math.trunc(Number(distance ?? 1) || 0)));
+    if (target === 'range') {
+      const tiles = this.resolveTargetTilesByDistance(
+        ctx,
+        Math.max(0, Math.trunc(Number(distance ?? 1) || 0)),
+      );
+      if (!excludeSelf) return tiles;
+      const selfKey = this.tileKey(ctx.origin.col, ctx.origin.row);
+      return tiles.filter((key) => key !== selfKey);
+    }
     return [this.tileKey(ctx.origin.col, ctx.origin.row)];
   }
 
@@ -2980,6 +3059,21 @@ export class WorldMapsService implements OnModuleInit {
         out.push({ kind: 'requireBuildingInRange', presetId, distance, minCount, negate, repeat });
         continue;
       }
+      if (kind === 'requireTroopInRange') {
+        const presetId = String((entry as any).presetId ?? '').trim();
+        if (!presetId) continue;
+        const hasDistance = Object.prototype.hasOwnProperty.call(
+          entry as Record<string, unknown>,
+          'distance',
+        );
+        const parsedDistance = this.toNullableIntMin((entry as any).distance, 0);
+        const distance = parsedDistance ?? (hasDistance ? 0 : 1);
+        const minCount = this.toNullableIntMin((entry as any).minCount, 0) ?? undefined;
+        const negate = !!(entry as any).negate;
+        const repeat = !!(entry as any).repeat;
+        out.push({ kind: 'requireTroopInRange', presetId, distance, minCount, negate, repeat });
+        continue;
+      }
       // legacy compatibility
       if (kind === 'requireAdjacentTag') {
         const tagId = String((entry as any).tagId ?? '').trim();
@@ -3105,6 +3199,9 @@ export class WorldMapsService implements OnModuleInit {
           kind,
           field,
           delta: (cast.delta ?? { kind: 'const', value: 0 }) as any,
+          ...(String(cast.target ?? '').trim() === 'range'
+            ? { excludeSelf: !!cast.excludeSelf }
+            : {}),
           ...normalizeTarget(cast),
         });
         continue;
@@ -3116,6 +3213,9 @@ export class WorldMapsService implements OnModuleInit {
           kind,
           tagPresetId,
           ...(cast.value != null ? { value: String(cast.value ?? '').trim() } : {}),
+          ...(String(cast.target ?? '').trim() === 'range'
+            ? { excludeSelf: !!cast.excludeSelf }
+            : {}),
           ...normalizeTarget(cast),
         });
         continue;
@@ -3126,6 +3226,9 @@ export class WorldMapsService implements OnModuleInit {
         out.push({
           kind,
           tagPresetId,
+          ...(String(cast.target ?? '').trim() === 'range'
+            ? { excludeSelf: !!cast.excludeSelf }
+            : {}),
           ...normalizeTarget(cast),
         });
       }
@@ -3182,6 +3285,7 @@ export class WorldMapsService implements OnModuleInit {
     | {
         onBuild?: BuildingExecutionRule[];
         daily?: BuildingExecutionRule[];
+        sustain?: BuildingExecutionRule[];
         onRemove?: BuildingExecutionRule[];
       }
     | undefined {
@@ -3189,9 +3293,15 @@ export class WorldMapsService implements OnModuleInit {
     if (!src) return undefined;
     const onBuild = this.normalizeExecutionRulesInput(src.onBuild, false);
     const daily = this.normalizeExecutionRulesInput(src.daily, true);
+    const sustain = this.normalizeExecutionRulesInput(src.sustain, false);
     const onRemove = this.normalizeExecutionRulesInput(src.onRemove, false);
-    if (!onBuild && !daily && !onRemove) return undefined;
-    return { ...(onBuild ? { onBuild } : {}), ...(daily ? { daily } : {}), ...(onRemove ? { onRemove } : {}) };
+    if (!onBuild && !daily && !sustain && !onRemove) return undefined;
+    return {
+      ...(onBuild ? { onBuild } : {}),
+      ...(daily ? { daily } : {}),
+      ...(sustain ? { sustain } : {}),
+      ...(onRemove ? { onRemove } : {}),
+    };
   }
 
   private normalizeLegacyRow(input: unknown, ownerId: string) {
@@ -3381,6 +3491,36 @@ export class WorldMapsService implements OnModuleInit {
     return out;
   }
 
+  private parseTroopsDeployedByTileFromTileMemos(
+    input: unknown,
+  ): Record<string, Record<string, number>> {
+    const memos = this.normalizeTileMemosInput(input);
+    const encoded = String(memos[TROOP_STATE_MEMO_KEY] ?? '').trim();
+    if (!encoded) return {};
+    try {
+      const parsed = JSON.parse(encoded) as Record<string, unknown>;
+      const deployedRaw = this.toPlainRecord(parsed?.deployed) ?? {};
+      const out: Record<string, Record<string, number>> = {};
+      for (const [tileKeyRaw, byPresetRaw] of Object.entries(deployedRaw)) {
+        const tileKey = String(tileKeyRaw ?? '').trim();
+        if (!tileKey) continue;
+        const byPresetSrc = this.toPlainRecord(byPresetRaw) ?? {};
+        const byPreset: Record<string, number> = {};
+        for (const [presetIdRaw, qtyRaw] of Object.entries(byPresetSrc)) {
+          const presetId = String(presetIdRaw ?? '').trim();
+          if (!presetId) continue;
+          const qty = Math.max(0, Math.trunc(Number(qtyRaw ?? 0) || 0));
+          if (qty <= 0) continue;
+          byPreset[presetId] = qty;
+        }
+        if (Object.keys(byPreset).length > 0) out[tileKey] = byPreset;
+      }
+      return out;
+    } catch {
+      return {};
+    }
+  }
+
   private normalizeBuildingLines(input: unknown): BuildingPresetLine[] {
     if (!Array.isArray(input)) return [];
     const out: BuildingPresetLine[] = [];
@@ -3548,9 +3688,7 @@ export class WorldMapsService implements OnModuleInit {
   private async requireReadable(user: AuthUser, id: string) {
     const row = await this.prisma.worldMap.findUnique({ where: { id } });
     if (!row) throw new NotFoundException('world map not found');
-    if (!user.isAdmin && row.ownerId !== user.id) {
-      throw new ForbiddenException('forbidden');
-    }
+    // 월드맵은 비관리자도 읽기 전용 열람을 허용한다.
     return row;
   }
 

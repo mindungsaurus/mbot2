@@ -167,6 +167,7 @@ export type BuildingRuleAction =
       delta: BuildingRuleExpr;
       target?: BuildingRuleActionTargetScope;
       distance?: number;
+      excludeSelf?: boolean;
     }
   | {
       kind: 'addTileState';
@@ -174,12 +175,14 @@ export type BuildingRuleAction =
       value?: string;
       target?: BuildingRuleActionTargetScope;
       distance?: number;
+      excludeSelf?: boolean;
     }
   | {
       kind: 'removeTileState';
       tagPresetId: string;
       target?: BuildingRuleActionTargetScope;
       distance?: number;
+      excludeSelf?: boolean;
     };
 
 export type BuildingExecutionRule = {
@@ -215,6 +218,14 @@ export type BuildingPlacementRule =
       negate?: boolean;
       repeat?: boolean;
     }
+  | {
+      kind: 'requireTroopInRange';
+      presetId: string;
+      distance?: number;
+      minCount?: number;
+      negate?: boolean;
+      repeat?: boolean;
+    }
   | { kind: 'custom'; label: string };
 
 export type WorldMapBuildingPresetRow = {
@@ -236,6 +247,7 @@ export type WorldMapBuildingPresetRow = {
   effects?: {
     onBuild?: BuildingExecutionRule[];
     daily?: BuildingExecutionRule[];
+    sustain?: BuildingExecutionRule[];
     onRemove?: BuildingExecutionRule[];
   };
   createdAt: string;

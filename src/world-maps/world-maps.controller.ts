@@ -78,6 +78,7 @@ type UpsertBuildingPresetBody = {
     | {
         onBuild?: BuildingExecutionRule[];
         daily?: BuildingExecutionRule[];
+        sustain?: BuildingExecutionRule[];
         onRemove?: BuildingExecutionRule[];
       }
     | null;

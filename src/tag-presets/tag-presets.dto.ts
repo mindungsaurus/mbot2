@@ -19,6 +19,7 @@ export type CreateTagPresetDto = {
   kind?: TagPresetKind;
   decOnTurnStart?: boolean;
   decOnTurnEnd?: boolean;
+  decByCaster?: boolean;
   colorCode?: number | null;
 };
 
@@ -29,5 +30,6 @@ export type UpdateTagPresetDto = {
   kind?: TagPresetKind;
   decOnTurnStart?: boolean;
   decOnTurnEnd?: boolean;
+  decByCaster?: boolean;
   colorCode?: number | null;
 };

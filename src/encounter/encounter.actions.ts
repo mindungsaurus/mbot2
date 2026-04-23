@@ -138,6 +138,15 @@ type TurnTagDecayChange = {
   when: 'start' | 'end';
 };
 
+type TurnTagDecayContext = {
+  holderTurnUnitId?: string | null;
+  sourceTurnUnitId?: string | null;
+};
+
+type ApplyTurnTagDecayOptions = {
+  allowCasterDecay?: boolean;
+};
+
 function normPos(v: any): number {
   const n = Math.floor(Number(v));
   if (!Number.isFinite(n)) return 0;
@@ -721,8 +730,6 @@ export function applyActionInPlace(
       state.tempTurnStack.push(id);
 
       // 임시 턴 "시작" 자동감소 (+ 내역 수집)
-      const startDecays = decTurnTags(target, 'start');
-
       // 로그(부여)
       pushLog(
         state,
@@ -745,20 +752,12 @@ export function applyActionInPlace(
       );
 
       // 로그(임시 턴 시작 시 태그 자동감소)
-      if (startDecays.length) {
-        const txt = startDecays
-          .map((c) => `${c.tag} ${c.from}→${c.to}`)
-          .join(', ');
-        pushLog(
-          state,
-          'ACTION',
-          `${ctxTemp.unitName ?? id} 태그 자동감소(턴 시작): ${txt}.`,
-          action,
-          ctxTemp,
-        );
-      }
-
-      applyServantTagDecays(state, id, 'start', action, ctxTemp);
+      applyUnitTurnTagDecays(state, id, 'start', action, ctxTemp, {
+        allowCasterDecay: false,
+      });
+      applyServantTagDecays(state, id, 'start', action, ctxTemp, {
+        allowCasterDecay: false,
+      });
 
       return;
     }
@@ -776,15 +775,6 @@ export function applyActionInPlace(
 
 
       // 1) 현재 턴 "종료" 자동감소 (+ 내역 수집)
-      let endDecays: TurnTagDecayChange[] = [];
-      if (activeEntry.kind === 'unit') {
-        const u = state.units.find((x) => x.id === activeEntry.unitId);
-        if (u) {
-          normalizeUnit(u);
-          endDecays = decTurnTags(u, 'end');
-        }
-      }
-
       // 로그: 턴 종료
       pushLog(
         state,
@@ -794,27 +784,22 @@ export function applyActionInPlace(
         ctxBefore,
       );
 
-      // 로그: 턴 종료 시 태그 자동감소(있을 때만)
-      if (endDecays.length) {
-        const txt = endDecays
-          .map((c) => `${c.tag} ${c.from}→${c.to}`)
-          .join(', ');
-        pushLog(
+      if (activeEntry.kind === 'unit') {
+        applyUnitTurnTagDecays(
           state,
-          'ACTION',
-          `${ctxBefore.unitName ?? ctxBefore.unitId ?? '-'} 태그 자동감소(턴 종료): ${txt}.`,
+          activeEntry.unitId,
+          'end',
           action,
           ctxBefore,
+          { allowCasterDecay: !ctxBefore.isTemp },
         );
-      }
-
-      if (activeEntry.kind === 'unit') {
         applyServantTagDecays(
           state,
           activeEntry.unitId,
           'end',
           action,
           ctxBefore,
+          { allowCasterDecay: !ctxBefore.isTemp },
         );
       } else if (activeEntry.kind === 'group') {
         applyGroupTurnDecays(state, activeEntry.groupId, 'end', action, ctxBefore);
@@ -866,41 +851,10 @@ export function applyActionInPlace(
           if (!u) continue;
           normalizeUnit(u);
 
-          const startDecays = decTurnTags(u, 'start');
-          const endDecays = decTurnTags(u, 'end');
-
-          if (!startDecays.length && !endDecays.length) continue;
-
           const ctxDisabled = makeUnitCtx(state, unitId);
-
-          if (startDecays.length) {
-            const txt = startDecays
-              .map((c) => `${c.tag} ${c.from}->${c.to}`)
-              .join(', ');
-            pushLog(
-              state,
-              'ACTION',
-              `${ctxDisabled.unitName ?? unitId} 태그 자동감소(시작): ${txt}.`,
-              action,
-              ctxDisabled,
-            );
-          }
-
+          applyUnitTurnTagDecays(state, unitId, 'start', action, ctxDisabled);
           applyServantTagDecays(state, unitId, 'start', action, ctxDisabled);
-
-          if (endDecays.length) {
-            const txt = endDecays
-              .map((c) => `${c.tag} ${c.from}->${c.to}`)
-              .join(', ');
-            pushLog(
-              state,
-              'ACTION',
-              `${ctxDisabled.unitName ?? unitId} 태그 자동감소(종료): ${txt}.`,
-              action,
-              ctxDisabled,
-            );
-          }
-
+          applyUnitTurnTagDecays(state, unitId, 'end', action, ctxDisabled);
           applyServantTagDecays(state, unitId, 'end', action, ctxDisabled);
         }
       }
@@ -917,16 +871,8 @@ export function applyActionInPlace(
         tickMarkersOnPass(state, markerIds, action, ctxBefore);
       }
 
-      // 5) 다음 유닛 "턴 시작" 자동감소 (+ 내역 수집)
-      let startDecays: TurnTagDecayChange[] = [];
+      // 5) 다음 유닛 "턴 시작" 자동감소
       const nextEntry = order[nextTi];
-      if (nextEntry?.kind === 'unit') {
-        const nextUnit = state.units.find((x) => x.id === nextEntry.unitId);
-        if (nextUnit) {
-          normalizeUnit(nextUnit);
-          startDecays = decTurnTags(nextUnit, 'start');
-        }
-      }
 
       const ctxAfter = makeLogCtx(state);
 
@@ -939,21 +885,8 @@ export function applyActionInPlace(
         ctxAfter,
       );
 
-      // 로그: 턴 시작 시 태그 자동감소(있을 때만)
-      if (startDecays.length) {
-        const txt = startDecays
-          .map((c) => `${c.tag} ${c.from}→${c.to}`)
-          .join(', ');
-        pushLog(
-          state,
-          'ACTION',
-          `${ctxAfter.unitName ?? ctxAfter.unitId ?? '-'} 태그 자동감소(턴 시작): ${txt}.`,
-          action,
-          ctxAfter,
-        );
-      }
-
       if (nextEntry?.kind === 'unit') {
+        applyUnitTurnTagDecays(state, nextEntry.unitId, 'start', action, ctxAfter);
         applyServantTagDecays(state, nextEntry.unitId, 'start', action, ctxAfter);
       } else if (nextEntry?.kind === 'group') {
         applyGroupTurnDecays(state, nextEntry.groupId, 'start', action, ctxAfter);
@@ -2615,10 +2548,16 @@ function findNextTurnEntryIndex(
   return null;
 }
 
-function decTurnTags(u: Unit, when: 'start' | 'end'): TurnTagDecayChange[] {
+function decTurnTags(
+  u: Unit,
+  when: 'start' | 'end',
+  ctx?: TurnTagDecayContext,
+): TurnTagDecayChange[] {
   if (!u.tagStates) return [];
 
   const changes: TurnTagDecayChange[] = [];
+  const holderTurnUnitId = String(ctx?.holderTurnUnitId ?? '').trim() || null;
+  const sourceTurnUnitId = String(ctx?.sourceTurnUnitId ?? '').trim() || null;
 
   for (const [k, st] of Object.entries(u.tagStates)) {
     const stacks = clampTagStacks(st?.stacks ?? 0);
@@ -2629,6 +2568,12 @@ function decTurnTags(u: Unit, when: 'start' | 'end'): TurnTagDecayChange[] {
 
     const dec = when === 'start' ? !!st.decOnTurnStart : !!st.decOnTurnEnd;
     if (!dec) continue;
+    const decByCaster = !!(st as any).decByCaster;
+    const sourceUnitId = String((st as any).sourceUnitId ?? '').trim() || null;
+    const shouldDecay = decByCaster
+      ? !!sourceTurnUnitId && !!sourceUnitId && sourceTurnUnitId === sourceUnitId
+      : !!holderTurnUnitId && holderTurnUnitId === u.id;
+    if (!shouldDecay) continue;
 
     const next = stacks - 1;
 
@@ -2648,6 +2593,36 @@ function decTurnTags(u: Unit, when: 'start' | 'end'): TurnTagDecayChange[] {
   return changes;
 }
 
+function applyUnitTurnTagDecays(
+  state: EncounterState,
+  turnUnitId: string,
+  when: 'start' | 'end',
+  action?: Action,
+  ctxOverride?: EncounterLogEntry['ctx'],
+  options?: ApplyTurnTagDecayOptions,
+) {
+  const label = when === 'start' ? '턴 시작' : '턴 종료';
+  const sourceTurnUnitId =
+    options?.allowCasterDecay === false ? null : turnUnitId;
+  for (const u of state.units ?? []) {
+    normalizeUnit(u);
+    const changes = decTurnTags(u, when, {
+      holderTurnUnitId: turnUnitId,
+      sourceTurnUnitId,
+    });
+    if (!changes.length) continue;
+
+    const txt = changes.map((c) => `${c.tag} ${c.from}→${c.to}`).join(', ');
+    pushLog(
+      state,
+      'ACTION',
+      `${unitLabel(state, u.id)} 태그 자동감소(${label}): ${txt}.`,
+      action,
+      ctxOverride,
+    );
+  }
+}
+
 function getServants(state: EncounterState, masterId: string): Unit[] {
   return (state.units ?? []).filter((u) => {
     const master = (u as any).masterUnitId;
@@ -2664,24 +2639,13 @@ function applyServantTagDecays(
   when: 'start' | 'end',
   action?: Action,
   ctxOverride?: EncounterLogEntry['ctx'],
+  options?: ApplyTurnTagDecayOptions,
 ) {
   const servants = getServants(state, masterId);
   if (!servants.length) return;
 
   for (const u of servants) {
-    normalizeUnit(u);
-    const changes = decTurnTags(u, when);
-    if (!changes.length) continue;
-
-    const txt = changes.map((c) => `${c.tag} ${c.from}→${c.to}`).join(', ');
-    const label = when === 'start' ? '턴 시작' : '턴 종료';
-    pushLog(
-      state,
-      'ACTION',
-      `${unitLabel(state, u.id)} 태그 자동감소(${label}): ${txt}.`,
-      action,
-      ctxOverride,
-    );
+    applyUnitTurnTagDecays(state, u.id, when, action, ctxOverride, options);
   }
 }
 
@@ -2691,26 +2655,14 @@ function applyGroupTurnDecays(
   when: 'start' | 'end',
   action?: Action,
   ctxOverride?: EncounterLogEntry['ctx'],
+  options?: ApplyTurnTagDecayOptions,
 ) {
   const members = getGroupTurnUnits(state, groupId);
   if (!members.length) return;
 
   for (const u of members) {
-    normalizeUnit(u);
-    const changes = decTurnTags(u, when);
-    if (changes.length) {
-      const txt = changes.map((c) => `${c.tag} ${c.from}→${c.to}`).join(', ');
-      const label = when === 'start' ? '턴 시작' : '턴 종료';
-      pushLog(
-        state,
-        'ACTION',
-        `${unitLabel(state, u.id)} 태그 자동감소(${label}): ${txt}.`,
-        action,
-        ctxOverride,
-      );
-    }
-
-    applyServantTagDecays(state, u.id, when, action, ctxOverride);
+    applyUnitTurnTagDecays(state, u.id, when, action, ctxOverride, options);
+    applyServantTagDecays(state, u.id, when, action, ctxOverride, options);
   }
 }
 
@@ -3328,6 +3280,22 @@ function applyUnitPatch(u: Unit, patch: UnitPatch) {
           tagOp.decOnTurnEnd !== undefined
             ? !!tagOp.decOnTurnEnd
             : curState?.decOnTurnEnd,
+        decByCaster:
+          tagOp.decByCaster !== undefined
+            ? !!tagOp.decByCaster
+            : curState?.decByCaster,
+        sourceUnitId: (() => {
+          const nextDecByCaster =
+            tagOp.decByCaster !== undefined
+              ? !!tagOp.decByCaster
+              : !!curState?.decByCaster;
+          if (!nextDecByCaster) return undefined;
+          if (tagOp.sourceUnitId !== undefined) {
+            const sourceUnitId = String(tagOp.sourceUnitId ?? '').trim();
+            return sourceUnitId || undefined;
+          }
+          return curState?.sourceUnitId;
+        })(),
       };
     }
 

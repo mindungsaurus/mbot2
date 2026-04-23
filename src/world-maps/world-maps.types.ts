@@ -40,6 +40,7 @@ export type MapTileStatePreset = {
   name: string;
   color: string;
   hasValue: boolean;
+  folderId?: string | null;
 };
 
 export type MapTileStateAssignment = {
@@ -233,6 +234,7 @@ export type WorldMapBuildingPresetRow = {
   mapId: string | null;
   name: string;
   color: string;
+  folderId?: string | null;
   tier?: string;
   effort?: number;
   space?: number;
@@ -250,6 +252,18 @@ export type WorldMapBuildingPresetRow = {
     sustain?: BuildingExecutionRule[];
     onRemove?: BuildingExecutionRule[];
   };
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type WorldMapPresetFolderKind = 'tile' | 'building' | 'troop' | 'carriage';
+
+export type WorldMapPresetFolderRow = {
+  id: string;
+  kind: WorldMapPresetFolderKind;
+  name: string;
+  order: number;
+  parentId?: string | null;
   createdAt: string;
   updatedAt: string;
 };

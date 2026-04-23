@@ -137,6 +137,7 @@ export class TagPresetsService {
     const colorCode = normalizeColorCode(body?.colorCode);
     const decOnTurnStart = kind === 'stack' && normalizeBool(body?.decOnTurnStart);
     const decOnTurnEnd = kind === 'stack' && normalizeBool(body?.decOnTurnEnd);
+    const decByCaster = kind === 'stack' && normalizeBool(body?.decByCaster);
 
     if (folderId) {
       const folder = await this.prisma.tagPresetFolder.findFirst({
@@ -155,6 +156,7 @@ export class TagPresetsService {
         kind,
         decOnTurnStart,
         decOnTurnEnd,
+        decByCaster,
         colorCode,
       },
     });
@@ -192,6 +194,10 @@ export class TagPresetsService {
       body?.decOnTurnEnd !== undefined
         ? normalizeBool(body.decOnTurnEnd)
         : preset.decOnTurnEnd;
+    const nextDecByCaster =
+      body?.decByCaster !== undefined
+        ? normalizeBool(body.decByCaster)
+        : preset.decByCaster;
 
     return this.prisma.tagPreset.update({
       where: { id },
@@ -205,6 +211,7 @@ export class TagPresetsService {
         kind: nextKind,
         decOnTurnStart: nextKind === 'stack' ? nextDecStart : false,
         decOnTurnEnd: nextKind === 'stack' ? nextDecEnd : false,
+        decByCaster: nextKind === 'stack' ? nextDecByCaster : false,
         colorCode: body?.colorCode !== undefined ? normalizeColorCode(body.colorCode) : preset.colorCode,
       },
     });

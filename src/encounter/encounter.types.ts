@@ -52,8 +52,10 @@ export type Marker = {
 /** 턴 기반 태그(스택/옵션) */
 export interface TurnTagState {
   stacks: number; // >= 1
-  decOnTurnStart?: boolean; // 옵션1: 자신의 턴이 "올 때" 감소
-  decOnTurnEnd?: boolean; // 옵션2: 자신의 턴이 "끝날 때" 감소
+  decOnTurnStart?: boolean; // Decrement on holder turn start.
+  decOnTurnEnd?: boolean; // Decrement on holder turn end.
+  decByCaster?: boolean;
+  sourceUnitId?: string;
 }
 
 export interface Unit {
@@ -194,9 +196,11 @@ export interface HpPatch {
 export type TagStacksPatch = number | { delta: number } | null;
 
 export interface TurnTagPatch {
-  stacks?: TagStacksPatch; // null 또는 <=0이면 제거
+  stacks?: TagStacksPatch; // null or <=0 removes the tag.
   decOnTurnStart?: boolean;
   decOnTurnEnd?: boolean;
+  decByCaster?: boolean;
+  sourceUnitId?: string | null;
 }
 
 export interface TagsPatch {

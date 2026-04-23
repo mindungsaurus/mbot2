@@ -35,6 +35,8 @@ import type {
   CappedResourceId,
   WorldMapBuildingInstanceRow,
   WorldMapBuildingPresetRow,
+  WorldMapPresetFolderKind,
+  WorldMapPresetFolderRow,
   WorldMapTickLogRow,
 } from './world-maps.types';
 
@@ -68,11 +70,21 @@ type SharedTilePresetBody = {
   name?: string;
   color?: string;
   hasValue?: boolean;
+  folderId?: string | null;
+};
+
+type UpsertPresetFolderBody = {
+  kind?: WorldMapPresetFolderKind;
+  name?: string;
+  order?: number | null;
+  parentId?: string | null;
 };
 
 type UpsertBuildingPresetBody = {
   name?: string;
   color?: string;
+  folderId?: string | null;
+  folderKind?: WorldMapPresetFolderKind | null;
   tier?: string;
   effort?: number | null;
   space?: number | null;
@@ -119,6 +131,8 @@ type AppendWorldMapTickLogBody = {
 type RuntimeInstance = WorldMapBuildingInstanceRow & {
   preset?: WorldMapBuildingPresetRow;
 };
+
+const WORLD_MAP_PRESET_FOLDER_KINDS = ['tile', 'building', 'troop', 'carriage'] as const;
 
 type OverflowConversionTracker = {
   convertedGold: number;
@@ -410,17 +424,95 @@ export class WorldMapsService implements OnModuleInit {
     return rows.map((row) => this.toSharedTilePresetRow(row));
   }
 
+  async listSharedPresetFolders(
+    _user: AuthUser,
+    kind?: WorldMapPresetFolderKind,
+  ): Promise<WorldMapPresetFolderRow[]> {
+    const normalizedKind = kind ? this.normalizePresetFolderKind(kind) : undefined;
+    const rows = await this.prisma.worldMapPresetFolder.findMany({
+      where: normalizedKind ? { kind: normalizedKind } : undefined,
+      orderBy: [{ order: 'asc' }, { updatedAt: 'desc' }],
+    });
+    return rows.map((row) => this.toPresetFolderRow(row));
+  }
+
+  async createSharedPresetFolder(
+    user: AuthUser,
+    body: UpsertPresetFolderBody,
+  ): Promise<WorldMapPresetFolderRow> {
+    this.requireAdmin(user);
+    const kind = this.normalizePresetFolderKind(body?.kind);
+    const parentId = await this.resolvePresetFolderParentId(body?.parentId, kind, null);
+    const row = await this.prisma.worldMapPresetFolder.create({
+      data: {
+        kind,
+        name: this.normalizePresetFolderName(body?.name),
+        order: this.normalizePresetFolderOrder(body?.order),
+        parentId,
+      },
+    });
+    return this.toPresetFolderRow(row);
+  }
+
+  async updateSharedPresetFolder(
+    user: AuthUser,
+    folderId: string,
+    body: UpsertPresetFolderBody,
+  ): Promise<WorldMapPresetFolderRow> {
+    this.requireAdmin(user);
+    const current = await this.prisma.worldMapPresetFolder.findUnique({ where: { id: folderId } });
+    if (!current) throw new NotFoundException('preset folder not found');
+    const data: Record<string, unknown> = {};
+    if (body?.name !== undefined) data.name = this.normalizePresetFolderName(body.name);
+    if (body?.order !== undefined) data.order = this.normalizePresetFolderOrder(body.order);
+    if (body?.parentId !== undefined) {
+      data.parentId = await this.resolvePresetFolderParentId(body.parentId, current.kind as any, current.id);
+    }
+    const row = await this.prisma.worldMapPresetFolder.update({
+      where: { id: folderId },
+      data,
+    });
+    return this.toPresetFolderRow(row);
+  }
+
+  async deleteSharedPresetFolder(user: AuthUser, folderId: string) {
+    this.requireAdmin(user);
+    const current = await this.prisma.worldMapPresetFolder.findUnique({
+      where: { id: folderId },
+      select: { id: true },
+    });
+    if (!current) throw new NotFoundException('preset folder not found');
+    await this.prisma.$transaction([
+      this.prisma.worldMapTileStatePreset.updateMany({
+        where: { folderId },
+        data: { folderId: null },
+      }),
+      this.prisma.worldMapBuildingPreset.updateMany({
+        where: { folderId },
+        data: { folderId: null },
+      }),
+      this.prisma.worldMapPresetFolder.updateMany({
+        where: { parentId: folderId },
+        data: { parentId: null },
+      }),
+      this.prisma.worldMapPresetFolder.delete({ where: { id: folderId } }),
+    ]);
+    return { ok: true };
+  }
+
   async createSharedTilePreset(user: AuthUser, body: SharedTilePresetBody): Promise<MapTileStatePreset> {
     this.requireAdmin(user);
     const name = String(body?.name ?? '').trim();
     if (!name) throw new BadRequestException('tile preset name required');
     const color = this.normalizeHexColor(body?.color, '#e5e7eb');
     const hasValue = !!body?.hasValue;
+    const folderId = await this.resolvePresetFolderId(body?.folderId, 'tile');
     const row = await this.prisma.worldMapTileStatePreset.create({
       data: {
         name,
         color,
         hasValue,
+        folderId,
       },
     });
     return this.toSharedTilePresetRow(row);
@@ -444,6 +536,9 @@ export class WorldMapsService implements OnModuleInit {
     }
     if (body.color !== undefined) data.color = this.normalizeHexColor(body.color, '#e5e7eb');
     if (body.hasValue !== undefined) data.hasValue = !!body.hasValue;
+    if (body.folderId !== undefined) {
+      data.folderId = await this.resolvePresetFolderId(body.folderId, 'tile');
+    }
     const row = await this.prisma.worldMapTileStatePreset.update({
       where: { id: presetId },
       data,
@@ -505,11 +600,15 @@ export class WorldMapsService implements OnModuleInit {
     this.requireAdmin(user);
     const name = String(body?.name ?? '').trim();
     if (!name) throw new BadRequestException('building preset name required');
+    const folderKind =
+      body?.folderKind == null ? undefined : this.normalizePresetFolderKind(body.folderKind);
+    const folderId = await this.resolvePresetFolderId(body?.folderId, folderKind);
     const row = await this.prisma.worldMapBuildingPreset.create({
       data: {
         mapId: null,
         name,
         color: this.normalizeHexColor(body?.color, '#eab308'),
+        folderId,
         tier: String(body?.tier ?? '').trim() || null,
         effort: this.toNullableIntMin(body?.effort, 0),
         space: this.toNullableIntMin(body?.space, 0),
@@ -543,6 +642,11 @@ export class WorldMapsService implements OnModuleInit {
       data.name = name;
     }
     if (body.color !== undefined) data.color = this.normalizeHexColor(body.color, '#eab308');
+    if (body.folderId !== undefined) {
+      const folderKind =
+        body?.folderKind == null ? undefined : this.normalizePresetFolderKind(body.folderKind);
+      data.folderId = await this.resolvePresetFolderId(body.folderId, folderKind);
+    }
     if (body.tier !== undefined) data.tier = String(body.tier ?? '').trim() || null;
     if (body.effort !== undefined) data.effort = this.toNullableIntMin(body.effort, 0);
     if (body.space !== undefined) data.space = this.toNullableIntMin(body.space, 0);
@@ -740,11 +844,15 @@ export class WorldMapsService implements OnModuleInit {
     await this.requireWritable(user, mapId);
     const name = String(body?.name ?? '').trim();
     if (!name) throw new BadRequestException('building preset name required');
+    const folderKind =
+      body?.folderKind == null ? undefined : this.normalizePresetFolderKind(body.folderKind);
+    const folderId = await this.resolvePresetFolderId(body?.folderId, folderKind);
     const row = await this.prisma.worldMapBuildingPreset.create({
       data: {
         mapId,
         name,
         color: this.normalizeHexColor(body?.color, '#eab308'),
+        folderId,
         tier: String(body?.tier ?? '').trim() || null,
         effort: this.toNullableIntMin(body?.effort, 0),
         space: this.toNullableIntMin(body?.space, 0),
@@ -779,6 +887,11 @@ export class WorldMapsService implements OnModuleInit {
       data.name = name;
     }
     if (body.color !== undefined) data.color = this.normalizeHexColor(body.color, '#eab308');
+    if (body.folderId !== undefined) {
+      const folderKind =
+        body?.folderKind == null ? undefined : this.normalizePresetFolderKind(body.folderKind);
+      data.folderId = await this.resolvePresetFolderId(body.folderId, folderKind);
+    }
     if (body.tier !== undefined) data.tier = String(body.tier ?? '').trim() || null;
     if (body.effort !== undefined) data.effort = this.toNullableIntMin(body.effort, 0);
     if (body.space !== undefined) data.space = this.toNullableIntMin(body.space, 0);
@@ -2802,6 +2915,7 @@ export class WorldMapsService implements OnModuleInit {
       mapId: row.mapId,
       name: row.name,
       color: this.normalizeHexColor(row.color, '#eab308'),
+      folderId: String(row.folderId ?? '').trim() || null,
       tier: String(row.tier ?? '').trim() || undefined,
       effort: this.toNullableIntMin(row.effort, 0) ?? undefined,
       space: this.toNullableIntMin(row.space, 0) ?? undefined,
@@ -3378,7 +3492,96 @@ export class WorldMapsService implements OnModuleInit {
       name: String(row?.name ?? '').trim(),
       color: this.normalizeHexColor(row?.color, '#e5e7eb'),
       hasValue: !!row?.hasValue,
+      folderId: String(row?.folderId ?? '').trim() || null,
     };
+  }
+
+  private toPresetFolderRow(row: any): WorldMapPresetFolderRow {
+    return {
+      id: String(row?.id ?? '').trim(),
+      kind: this.normalizePresetFolderKind(row?.kind),
+      name: this.normalizePresetFolderName(row?.name),
+      order: this.normalizePresetFolderOrder(row?.order),
+      parentId: String(row?.parentId ?? '').trim() || null,
+      createdAt:
+        row?.createdAt instanceof Date
+          ? row.createdAt.toISOString()
+          : String(row?.createdAt ?? new Date().toISOString()),
+      updatedAt:
+        row?.updatedAt instanceof Date
+          ? row.updatedAt.toISOString()
+          : String(row?.updatedAt ?? new Date().toISOString()),
+    };
+  }
+
+  private normalizePresetFolderKind(value: unknown): WorldMapPresetFolderKind {
+    const kind = String(value ?? '').trim().toLowerCase();
+    if ((WORLD_MAP_PRESET_FOLDER_KINDS as readonly string[]).includes(kind)) {
+      return kind as WorldMapPresetFolderKind;
+    }
+    throw new BadRequestException('invalid preset folder kind');
+  }
+
+  private normalizePresetFolderName(value: unknown): string {
+    const name = String(value ?? '').trim();
+    if (!name) throw new BadRequestException('preset folder name required');
+    return name;
+  }
+
+  private normalizePresetFolderOrder(value: unknown): number {
+    const raw = Math.trunc(Number(value));
+    return Number.isFinite(raw) ? raw : 0;
+  }
+
+  private async resolvePresetFolderId(
+    folderIdValue: unknown,
+    expectedKind?: WorldMapPresetFolderKind,
+  ): Promise<string | null> {
+    const folderId = String(folderIdValue ?? '').trim();
+    if (!folderId) return null;
+    const folder = await this.prisma.worldMapPresetFolder.findUnique({
+      where: { id: folderId },
+      select: { id: true, kind: true },
+    });
+    if (!folder) throw new NotFoundException('preset folder not found');
+    if (expectedKind && folder.kind !== expectedKind) {
+      throw new BadRequestException('preset folder kind mismatch');
+    }
+    return folder.id;
+  }
+
+  private async resolvePresetFolderParentId(
+    parentIdValue: unknown,
+    expectedKind: WorldMapPresetFolderKind,
+    selfId: string | null,
+  ): Promise<string | null> {
+    const parentId = String(parentIdValue ?? '').trim();
+    if (!parentId) return null;
+    if (selfId && parentId === selfId) {
+      throw new BadRequestException('cannot set parent to self');
+    }
+    const parent = await this.prisma.worldMapPresetFolder.findUnique({
+      where: { id: parentId },
+      select: { id: true, kind: true, parentId: true },
+    });
+    if (!parent) throw new NotFoundException('preset folder not found');
+    if (parent.kind !== expectedKind) {
+      throw new BadRequestException('preset folder kind mismatch');
+    }
+    if (!selfId) return parent.id;
+
+    let cursor: string | null = parent.parentId ?? null;
+    while (cursor) {
+      if (cursor === selfId) {
+        throw new BadRequestException('cannot set parent to a descendant');
+      }
+      const next = await this.prisma.worldMapPresetFolder.findUnique({
+        where: { id: cursor },
+        select: { parentId: true },
+      });
+      cursor = next?.parentId ?? null;
+    }
+    return parent.id;
   }
 
   private requireAdmin(user: AuthUser) {
@@ -3400,6 +3603,7 @@ export class WorldMapsService implements OnModuleInit {
         name,
         color: this.normalizeHexColor(item?.color),
         hasValue: !!item?.hasValue,
+        folderId: String(item?.folderId ?? '').trim() || null,
       });
     }
     return out;

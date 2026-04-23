@@ -135,6 +135,7 @@ model TagPreset {
   kind           String
   decOnTurnStart Boolean  @default(false)
   decOnTurnEnd   Boolean  @default(false)
+  decByCaster    Boolean  @default(false)
   colorCode      Int?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -256,6 +257,7 @@ model WorldMapBuildingPreset {
   mapId          String?
   name           String
   color          String
+  folderId       String?
   tier           String?
   effort         Int?
   space          Int?
@@ -274,11 +276,27 @@ model WorldMapBuildingPreset {
   @@index([mapId, name])
 }
 
+model WorldMapPresetFolder {
+  id        String   @id @default(cuid())
+  kind      String
+  name      String
+  order     Int      @default(0)
+  parentId  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  parent    WorldMapPresetFolder?  @relation("WorldMapPresetFolderTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children  WorldMapPresetFolder[] @relation("WorldMapPresetFolderTree")
+
+  @@index([kind, order])
+  @@index([parentId])
+}
+
 model WorldMapTileStatePreset {
   id        String   @id @default(cuid())
   name      String
   color     String
   hasValue  Boolean  @default(false)
+  folderId  String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }

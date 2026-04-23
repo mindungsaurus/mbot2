@@ -28,6 +28,7 @@ import type {
   MapTileRegionState,
   UpkeepPopulationId,
   BuildingResourceId,
+  WorldMapPresetFolderKind,
 } from './world-maps.types';
 
 type CreateWorldMapBody = {
@@ -38,6 +39,14 @@ type SharedTilePresetBody = {
   name?: string;
   color?: string;
   hasValue?: boolean;
+  folderId?: string | null;
+};
+
+type UpsertPresetFolderBody = {
+  kind?: WorldMapPresetFolderKind;
+  name?: string;
+  order?: number | null;
+  parentId?: string | null;
 };
 
 type UpdateWorldMapBody = {
@@ -61,6 +70,8 @@ type UpdateWorldMapBody = {
 type UpsertBuildingPresetBody = {
   name?: string;
   color?: string;
+  folderId?: string | null;
+  folderKind?: WorldMapPresetFolderKind | null;
   tier?: string;
   effort?: number | null;
   space?: number | null;
@@ -127,6 +138,33 @@ export class WorldMapsController {
   @Get('shared/tile-presets')
   listSharedTilePresets(@Req() req: AuthRequest) {
     return this.worldMaps.listSharedTilePresets(req.user);
+  }
+
+  @Get('shared/preset-folders')
+  listSharedPresetFolders(
+    @Req() req: AuthRequest,
+    @Query('kind') kind?: WorldMapPresetFolderKind,
+  ) {
+    return this.worldMaps.listSharedPresetFolders(req.user, kind);
+  }
+
+  @Post('shared/preset-folders')
+  createSharedPresetFolder(@Req() req: AuthRequest, @Body() body: UpsertPresetFolderBody) {
+    return this.worldMaps.createSharedPresetFolder(req.user, body);
+  }
+
+  @Patch('shared/preset-folders/:folderId')
+  updateSharedPresetFolder(
+    @Req() req: AuthRequest,
+    @Param('folderId') folderId: string,
+    @Body() body: UpsertPresetFolderBody,
+  ) {
+    return this.worldMaps.updateSharedPresetFolder(req.user, folderId, body);
+  }
+
+  @Delete('shared/preset-folders/:folderId')
+  deleteSharedPresetFolder(@Req() req: AuthRequest, @Param('folderId') folderId: string) {
+    return this.worldMaps.deleteSharedPresetFolder(req.user, folderId);
   }
 
   @Post('shared/tile-presets')

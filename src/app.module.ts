@@ -1,5 +1,4 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { NecordModule } from 'necord';
@@ -13,17 +12,28 @@ import { UnitPresetsModule } from './unit-presets/unit-presets.module';
 import { TagPresetsModule } from './tag-presets/tag-presets.module';
 import { WorldMapsModule } from './world-maps/world-maps.module';
 
+function isDiscordBotEnabled() {
+  const raw = String(process.env.DISCORD_BOT_ENABLED ?? 'true')
+    .trim()
+    .toLowerCase();
+  return raw !== 'false' && raw !== '0' && raw !== 'off' && raw !== 'no';
+}
+
 @Module({
   imports: [
-    NecordModule.forRoot({
-      token: process.env.DISCORD_TOKEN ?? '',
-      intents: [
-        IntentsBitField.Flags.Guilds,
-        IntentsBitField.Flags.GuildMessages,
-        IntentsBitField.Flags.MessageContent,
-      ],
-      development: ['1284642997375336592', '1273347630767804539'],
-    }),
+    ...(isDiscordBotEnabled()
+      ? [
+          NecordModule.forRoot({
+            token: process.env.DISCORD_TOKEN ?? '',
+            intents: [
+              IntentsBitField.Flags.Guilds,
+              IntentsBitField.Flags.GuildMessages,
+              IntentsBitField.Flags.MessageContent,
+            ],
+            development: ['1284642997375336592', '1273347630767804539'],
+          }),
+        ]
+      : []),
     GoldModule,
     ItemsModule,
     DiceModule,

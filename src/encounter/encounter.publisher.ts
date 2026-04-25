@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { existsSync } from 'node:fs';
 import { createCanvas, registerFont } from 'canvas';
 import type { CanvasRenderingContext2D } from 'canvas';
@@ -121,7 +121,11 @@ const IDENTIFIER_SYMBOLS = [
 
 @Injectable()
 export class EncounterPublisher {
-  constructor(private readonly client: Client) {} // ✅ Necord가 제공하는 Client Provider :contentReference[oaicite:1]{index=1}
+  private readonly logger = new Logger(EncounterPublisher.name);
+
+  constructor(
+    @Optional() @Inject(Client) private readonly client?: Client,
+  ) {}
 
   async sendAnsiToChannel(
     channelId: string,
@@ -129,6 +133,12 @@ export class EncounterPublisher {
     state?: PublishRenderState,
   ) {
     if (!channelId) throw new Error('COMBAT_DISCORD_CHANNEL_ID is required');
+    if (!this.client) {
+      this.logger.warn(
+        'Discord client unavailable; skipping encounter publish.',
+      );
+      return;
+    }
 
     const channel = await this.client.channels.fetch(channelId);
     if (!channel) throw new Error(`channel not found: ${channelId}`);

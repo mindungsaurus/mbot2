@@ -1,13 +1,21 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { ChannelType, Client, TextChannel } from 'discord.js';
 
 @Injectable()
 export class ItemsPublisher {
   private readonly logger = new Logger(ItemsPublisher.name);
-  constructor(private readonly client: Client) {}
+  constructor(
+    @Optional() @Inject(Client) private readonly client?: Client,
+  ) {}
 
   async sendAnsiToChannel(channelId: string, ansiText: string) {
     if (!channelId) return;
+    if (!this.client) {
+      this.logger.warn(
+        'Discord client unavailable; skipping item event publish.',
+      );
+      return;
+    }
 
     const channel = await this.client.channels.fetch(channelId);
     if (!channel) throw new Error(`channel not found: ${channelId}`);

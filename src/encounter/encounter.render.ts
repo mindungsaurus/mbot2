@@ -458,7 +458,7 @@ function renderTurnSummaryLines(
         return `${unitSummaryColor(unit.side, summaryUnitColorCode(state, unit))}${label}${RESET}${GRAY}`;
       })
       .join(', ');
-    lines.push(`${GROUP_MEMBERS_GRAY}삭제된 유닛:${RESET}`);
+    lines.push(`${DISABLED_COLOR}삭제된 유닛:${RESET}`);
     lines.push(`${deleted}${RESET}`);
   }
 

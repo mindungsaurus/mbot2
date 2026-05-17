@@ -9,7 +9,7 @@ import { randomUUID } from 'crypto';
 
 import type { EncounterState, Action } from './encounter.types';
 import { applyAction, applyActions } from './encounter.actions';
-import { renderAnsi } from './encounter.render';
+import { renderAnsi, renderTurnSummaryAnsi } from './encounter.render';
 
 const MAX_UNDO = 50;
 
@@ -216,6 +216,21 @@ export class EncounterService {
   ): Promise<string> {
     const tagColors = await this.getTagPresetColorMap(userId);
     return renderAnsi(idState, opts, tagColors);
+  }
+
+  renderTurnSummary(
+    idState: EncounterState,
+    tagColors?: Record<string, number>,
+  ): string {
+    return renderTurnSummaryAnsi(idState, tagColors);
+  }
+
+  async renderTurnSummaryForUser(
+    userId: string,
+    idState: EncounterState,
+  ): Promise<string> {
+    const tagColors = await this.getTagPresetColorMap(userId);
+    return renderTurnSummaryAnsi(idState, tagColors);
   }
 
   private async getTagPresetColorMap(userId: string) {

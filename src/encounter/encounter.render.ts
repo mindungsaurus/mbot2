@@ -1,5 +1,5 @@
 // encounter.render.ts
-import { EncounterState, Unit } from './encounter.types';
+import { EncounterState, EncounterTurnSummary, Unit } from './encounter.types';
 import {
   getAcBreakdown,
   getComputedAc,
@@ -375,6 +375,367 @@ export function renderAnsi(
   else for (const d of distanceMarks) lines.push(`${color(39)}${tintDistanceIndex(d)}${RESET}`);
 
   return lines.join('\n');
+}
+
+export function renderTurnSummaryAnsi(
+  state: EncounterState,
+  tagColors?: Record<string, number>,
+): string {
+  return renderTurnSummaryLines(state, tagColors).join('\n');
+}
+
+function selectTurnSummary(state: EncounterState): EncounterTurnSummary | null {
+  const current = state.currentTurnSummary;
+  if (current?.hasChanges) return current;
+  const latest = state.latestTurnSummary;
+  if (latest?.hasChanges) return latest;
+  return current ?? latest ?? null;
+}
+
+function renderTurnSummaryLines(
+  state: EncounterState,
+  tagColors?: Record<string, number>,
+): string[] {
+  const summary = selectTurnSummary(state);
+  if (!summary) return [];
+
+  const heading = summary.isTemp
+    ? `Turn Summary - Temp: ${summary.subjectLabel}`
+    : `Turn Summary - ${summary.subjectLabel}`;
+  const lines = [`${color(35)}${heading}${RESET}`];
+
+  if (!summary.hasChanges) {
+    lines.push(`${GRAY}- no changes${RESET}`);
+    return lines;
+  }
+
+  const removedUnits = (summary.units ?? []).filter(
+    (unit) => unit.status === 'removed',
+  );
+
+  for (const unit of summary.units ?? []) {
+    if (unit.status === 'removed') continue;
+    const renderedChanges = (unit.changes ?? [])
+      .flatMap((change) => {
+        const rendered = renderSummaryChange(change, tagColors);
+        return Array.isArray(rendered) ? rendered : rendered ? [rendered] : [];
+      });
+    if (renderedChanges.length === 0) continue;
+
+    const label = unit.alias ? `${unit.name} (${unit.alias})` : unit.name;
+    lines.push(
+      `${unitSummaryColor(unit.side, summaryUnitColorCode(state, unit))}${label}${RESET}`,
+    );
+    for (const rendered of renderedChanges) {
+      lines.push(`${GRAY}- ${rendered}${RESET}`);
+    }
+  }
+
+  const renderedMarkers = (summary.markers ?? [])
+    .map((marker) => ({
+      marker,
+      changes: (marker.changes ?? [])
+        .map((change) => renderMarkerSummaryChange(marker, change))
+        .filter((line): line is string => !!line),
+    }))
+    .filter((entry) => entry.changes.length > 0);
+
+  if (renderedMarkers.length) {
+    lines.push(`${color(36)}Markers${RESET}`);
+    for (const { marker, changes } of renderedMarkers) {
+      const label = marker.alias ? `${marker.name} (${marker.alias})` : marker.name;
+      lines.push(`${GRAY}${label}${RESET}`);
+      for (const rendered of changes) {
+        lines.push(`${GRAY}- ${rendered}${RESET}`);
+      }
+    }
+  }
+
+  if (removedUnits.length) {
+    const deleted = removedUnits
+      .map((unit) => {
+        const label = unit.alias ? `${unit.name} (${unit.alias})` : unit.name;
+        return `${unitSummaryColor(unit.side, summaryUnitColorCode(state, unit))}${label}${RESET}${GRAY}`;
+      })
+      .join(', ');
+    lines.push(`${GROUP_MEMBERS_GRAY}삭제된 유닛:${RESET}`);
+    lines.push(`${deleted}${RESET}`);
+  }
+
+  return lines;
+}
+
+function summaryUnitColorCode(
+  state: EncounterState,
+  unit: EncounterTurnSummary['units'][number],
+) {
+  if (typeof unit.colorCode === 'number') return unit.colorCode;
+  const live = state.units.find((candidate) => candidate.id === unit.unitId);
+  return typeof live?.colorCode === 'number' ? live.colorCode : undefined;
+}
+
+function renderSummaryChange(
+  change: EncounterTurnSummary['units'][number]['changes'][number],
+  tagColors?: Record<string, number>,
+): string | string[] | null {
+  if (change.kind === 'hp') return renderHpSummaryChange(change);
+  if (change.kind === 'deathSaves') return renderDeathSaveSummaryChange(change);
+  if (change.kind === 'spellSlots') return renderSpellSlotSummaryChange(change);
+  if (change.kind === 'consumables') return renderConsumableSummaryChange(change);
+  if (change.kind === 'toggleTags') return renderToggleTagSummaryChange(change, tagColors);
+  if (change.kind === 'stackTags') return renderStackTagSummaryChange(change, tagColors);
+  return `${change.label}: ${change.before ?? '-'} → ${change.after ?? '-'}`;
+}
+
+function renderHpSummaryChange(
+  change: EncounterTurnSummary['units'][number]['changes'][number],
+): string | string[] {
+  const before = parseHpSummary(change.before);
+  const after = parseHpSummary(change.after);
+  if (!after) return `체력: ${change.before ?? '-'} → ${change.after ?? '-'}`;
+
+  const rawCurDelta = before ? after.cur - before.cur : after.cur;
+  const maxDelta = before ? after.max - before.max : after.max;
+  const tempDelta = before ? after.temp - before.temp : after.temp;
+  const curDelta =
+    before && before.cur === before.max && maxDelta !== 0
+      ? rawCurDelta - maxDelta
+      : rawCurDelta;
+
+  const lines: string[] = [];
+  if (curDelta !== 0 || tempDelta !== 0) {
+    lines.push(`${hpChangeLabel(curDelta, tempDelta)}: ${formatHpWithDelta(after, curDelta, tempDelta)}`);
+  }
+  if (maxDelta !== 0) {
+    lines.push(`${maxHpChangeLabel(maxDelta)}: ${after.max} ${formatSignedDeltaParen(maxDelta)}`);
+  }
+  return lines.length ? lines : `체력: ${formatHpBase(after)}`;
+}
+
+function hpChangeLabel(curDelta: number, tempDelta: number) {
+  if (curDelta < 0) return '체력 감소';
+  if (curDelta > 0) return '체력 증가';
+  if (tempDelta !== 0) return '임시 체력';
+  return '체력';
+}
+
+function maxHpChangeLabel(maxDelta: number) {
+  return maxDelta < 0 ? '최대 체력 감소' : '최대 체력 증가';
+}
+
+function renderDeathSaveSummaryChange(
+  change: EncounterTurnSummary['units'][number]['changes'][number],
+): string {
+  const before = parseDeathSaveSummary(change.before);
+  const after = parseDeathSaveSummary(change.after);
+  if (!after) return `사망내성: ${change.before ?? '-'} → ${change.after ?? '-'}`;
+  const successDelta = before ? after.success - before.success : after.success;
+  const failureDelta = before ? after.failure - before.failure : after.failure;
+  const label = before ? '사망내성' : '사망 내성 표기 시작';
+  return `${label}: (${formatDeathPart(after.success, successDelta, color(32))}, ${formatDeathPart(after.failure, failureDelta, color(31))})`;
+}
+
+function renderSpellSlotSummaryChange(
+  change: EncounterTurnSummary['units'][number]['changes'][number],
+): string {
+  const before = parseNumberRecordSummary(change.before);
+  const after = parseNumberRecordSummary(change.after);
+  const levels = numericKeys(before, after);
+  if (levels.length === 0) return '주문슬롯: [ ]';
+  const cells = levels.map((level) => {
+    const key = String(level);
+    const value = after[key] ?? 0;
+    const delta = value - (before[key] ?? 0);
+    return `${value}${formatSignedDeltaParen(delta)}`;
+  });
+  return `주문슬롯: [${cells.join(' / ')}]`;
+}
+
+function renderConsumableSummaryChange(
+  change: EncounterTurnSummary['units'][number]['changes'][number],
+): string {
+  const before = parseNumberRecordSummary(change.before);
+  const after = parseNumberRecordSummary(change.after);
+  const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort(
+    (a, b) => a.localeCompare(b, undefined, { numeric: true }),
+  );
+  const parts = keys
+    .filter((key) => (before[key] ?? 0) !== (after[key] ?? 0))
+    .map((key) => {
+      const value = after[key] ?? 0;
+      const delta = value - (before[key] ?? 0);
+      return `${key} x${value}${formatSignedDeltaParen(delta)}`;
+    });
+  return `고유소모값: ${parts.length ? parts.join(', ') : '변경 없음'}`;
+}
+
+function renderToggleTagSummaryChange(
+  change: EncounterTurnSummary['units'][number]['changes'][number],
+  tagColors?: Record<string, number>,
+): string | null {
+  const before = new Set(parseListSummary(change.before));
+  const after = new Set(parseListSummary(change.after));
+  const gained = [...after].filter((tag) => !before.has(tag)).sort((a, b) => a.localeCompare(b));
+  const lost = [...before].filter((tag) => !after.has(tag)).sort((a, b) => a.localeCompare(b));
+  const parts = [
+    ...gained.map((tag) => `${colorTag(tag, tagColors)} 획득`),
+    ...lost.map((tag) => `${colorTag(tag, tagColors)} 잃음`),
+  ];
+  return parts.length ? `태그: ${parts.join(', ')}` : null;
+}
+
+function renderStackTagSummaryChange(
+  change: EncounterTurnSummary['units'][number]['changes'][number],
+  tagColors?: Record<string, number>,
+): string | null {
+  const before = parseStackTagSummary(change.before);
+  const after = parseStackTagSummary(change.after);
+  const names = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort((a, b) =>
+    a.localeCompare(b),
+  );
+  const parts = names
+    .filter((name) => (before[name] ?? 0) !== (after[name] ?? 0))
+    .map((name) => {
+      const value = after[name] ?? 0;
+      const delta = value - (before[name] ?? 0);
+      const prefix = value > 0 ? `${colorTag(name, tagColors)} x${value}` : `${colorTag(name, tagColors)} 0`;
+      return `${prefix}${formatSignedDeltaParen(delta)}`;
+    });
+  return parts.length ? `스택 태그: ${parts.join(', ')}` : null;
+}
+
+function renderMarkerSummaryChange(
+  marker: EncounterTurnSummary['markers'][number],
+  change: EncounterTurnSummary['markers'][number]['changes'][number],
+): string | null {
+  const label = marker.alias ? `${marker.name} (${marker.alias})` : marker.name;
+  if (change.kind === 'created') {
+    return `마커 생성됨: ${label}${formatMarkerDurationFromText(change.after)}`;
+  }
+  if (change.kind === 'removed') {
+    return `마커 제거됨: ${label}${formatMarkerDurationFromText(change.before)}`;
+  }
+  if (change.label === '위치' || change.label === '범위') return null;
+  if (change.label === '지속시간') {
+    return `마커 지속시간: ${label} ${formatHourglass(change.before)} → ${formatHourglass(change.after)}`;
+  }
+  return `${change.label}: ${change.before ?? '-'} → ${change.after ?? '-'}`;
+}
+
+function parseHpSummary(value?: string): { cur: number; max: number; temp: number } | null {
+  const text = String(value ?? '');
+  const match = text.match(/(\d+)\/(\d+)(?:\s*\(\+(\d+)\))?/);
+  if (!match) return null;
+  return {
+    cur: Number(match[1]),
+    max: Number(match[2]),
+    temp: Number(match[3] ?? 0),
+  };
+}
+
+function formatHpWithDelta(
+  hp: { cur: number; max: number; temp: number },
+  curDelta: number,
+  tempDelta: number,
+) {
+  const base = formatHpBase(hp);
+  const parts: string[] = [];
+  if (curDelta !== 0) {
+    parts.push(formatSignedDelta(curDelta));
+  }
+  if (tempDelta !== 0) {
+    parts.push(formatSignedDelta(tempDelta, color(34)));
+  }
+  return parts.length ? `${base} (${parts.join('/')})` : base;
+}
+
+function formatHpBase(hp: { cur: number; max: number; temp: number }) {
+  return `${hp.cur}/${hp.max}${hp.temp > 0 ? colorNumber(`+${hp.temp}`, color(34)) : ''}`;
+}
+
+function parseDeathSaveSummary(value?: string): { success: number; failure: number } | null {
+  const text = String(value ?? '');
+  const match = text.match(/(-?\d+)S\/(-?\d+)F/);
+  if (!match) return null;
+  return { success: Number(match[1]), failure: Number(match[2]) };
+}
+
+function formatDeathPart(value: number, delta: number, tint: string) {
+  const suffix = delta === 0 ? '' : ` (${formatSignedDelta(delta, tint)})`;
+  return `${colorNumber(value, tint)}${suffix}`;
+}
+
+function parseNumberRecordSummary(value?: string): Record<string, number> {
+  const text = String(value ?? '').trim();
+  if (!text || text === '없음' || text.includes('?놁쓬')) return {};
+  const out: Record<string, number> = {};
+  for (const part of text.split(',')) {
+    const [rawKey, rawValue] = part.split(':');
+    const key = rawKey?.trim();
+    const value = Number(rawValue?.trim());
+    if (key && Number.isFinite(value)) out[key] = value;
+  }
+  return out;
+}
+
+function numericKeys(...records: Array<Record<string, number>>) {
+  return [...new Set(records.flatMap((record) => Object.keys(record).map((key) => Number(key))))]
+    .filter((level) => Number.isFinite(level) && level >= 1)
+    .sort((a, b) => a - b);
+}
+
+function parseListSummary(value?: string): string[] {
+  const text = String(value ?? '').trim();
+  if (!text || text === '없음' || text.includes('?놁쓬')) return [];
+  return text
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function parseStackTagSummary(value?: string): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const part of parseListSummary(value)) {
+    const match = part.match(/^(.+?)\s+x(\d+)/);
+    if (!match) continue;
+    out[match[1].trim()] = Number(match[2]);
+  }
+  return out;
+}
+
+function formatSignedDelta(delta: number, tint?: string) {
+  if (delta === 0) return '';
+  const sign = delta > 0 ? '+' : '';
+  const colorCode = tint ?? (delta > 0 ? color(32) : color(31));
+  return colorNumber(`${sign}${delta}`, colorCode);
+}
+
+function formatSignedDeltaParen(delta: number, tint?: string) {
+  if (delta === 0) return '';
+  return `(${formatSignedDelta(delta, tint)})`;
+}
+
+function colorTag(tag: string, tagColors?: Record<string, number>) {
+  const code = tagColors?.[tag];
+  return typeof code === 'number' ? `${color(code)}${tag}${RESET}${GRAY}` : tag;
+}
+
+function formatMarkerDurationFromText(value?: string) {
+  const match = String(value ?? '').match(/duration\s+(\d+)/);
+  return match ? ` ${formatHourglass(match[1])}` : '';
+}
+
+function formatHourglass(value?: string) {
+  const raw = String(value ?? '').trim();
+  if (!raw || raw === '없음' || raw.includes('?놁쓬')) return '⏳-';
+  return `⏳${raw}`;
+}
+
+function unitSummaryColor(side?: string, colorCode?: number) {
+  if (typeof colorCode === 'number') return color(colorCode);
+  if (side === 'TEAM') return color(34);
+  if (side === 'ENEMY') return color(31);
+  return color(90);
 }
 
 function renderUnitLine(

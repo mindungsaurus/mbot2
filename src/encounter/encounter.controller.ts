@@ -22,6 +22,7 @@ type PublishBody = {
   hideBenchTeam?: boolean;
   hideBenchEnemy?: boolean;
   planarMode?: boolean;
+  includeTurnSummary?: boolean;
 };
 
 type PublishRenderState = Pick<EncounterState, 'units' | 'markers' | 'blockedCells' | 'gridLabels' | 'turnOrder' | 'turnIndex' | 'round' | 'battleStarted' | 'tempTurnStack' | 'turnGroups'>;
@@ -89,12 +90,16 @@ export class EncounterController {
     const hideBenchTeam = hideBench || !!body?.hideBenchTeam;
     const hideBenchEnemy = hideBench || !!body?.hideBenchEnemy;
     const planarMode = !!body?.planarMode;
+    const includeTurnSummary = body?.includeTurnSummary !== false;
     const ansi = await this.encounter.renderForUser(req.user.id, state, {
       hideBench,
       hideBenchTeam,
       hideBenchEnemy,
       planarMode,
     });
+    const summaryAnsi = includeTurnSummary
+      ? await this.encounter.renderTurnSummaryForUser(req.user.id, state)
+      : '';
 
     const publishState: PublishRenderState = {
       units: state.units,
@@ -114,6 +119,9 @@ export class EncounterController {
       ansi,
       planarMode ? publishState : undefined,
     ); // ????�� ??메시지
+    if (summaryAnsi.trim()) {
+      await this.publisher.sendAnsiToChannel(channelId, summaryAnsi);
+    }
     return { ok: true, channelId };
   }
 

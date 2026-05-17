@@ -114,6 +114,98 @@ export type TurnEndSnapshot = {
   manualStacks?: string;
 };
 
+export type TurnSummaryChangeKind =
+  | 'created'
+  | 'removed'
+  | 'hp'
+  | 'deathSaves'
+  | 'spellSlots'
+  | 'consumables'
+  | 'toggleTags'
+  | 'stackTags'
+  | 'marker';
+
+export interface TurnSummaryChange {
+  kind: TurnSummaryChangeKind;
+  label: string;
+  before?: string;
+  after?: string;
+}
+
+export interface UnitTurnSummarySnapshot {
+  id: string;
+  name: string;
+  alias?: string;
+  side: Side;
+  bench?: BenchGroup;
+  colorCode?: number;
+  hp?: { cur: number; max: number; temp?: number };
+  deathSaves?: { success: number; failure: number };
+  spellSlots: Record<string, number>;
+  consumables: Record<string, number>;
+  toggleTags: string[];
+  stackTags: Record<
+    string,
+    {
+      stacks: number;
+      decOnTurnStart?: boolean;
+      decOnTurnEnd?: boolean;
+      decByCaster?: boolean;
+      sourceUnitId?: string;
+    }
+  >;
+}
+
+export interface MarkerTurnSummarySnapshot {
+  id: string;
+  name: string;
+  alias?: string;
+  pos?: Pos;
+  cells?: Pos[];
+  duration?: number;
+}
+
+export interface FieldTurnSummaryBaseline {
+  id: string;
+  at: string;
+  round: number;
+  isTemp: boolean;
+  subjectLabel: string;
+  units: Record<string, UnitTurnSummarySnapshot>;
+  markers: Record<string, MarkerTurnSummarySnapshot>;
+}
+
+export interface UnitTurnSummary {
+  unitId: string;
+  name: string;
+  alias?: string;
+  side?: Side;
+  bench?: BenchGroup;
+  colorCode?: number;
+  status?: 'created' | 'removed' | 'changed';
+  changes: TurnSummaryChange[];
+}
+
+export interface MarkerTurnSummary {
+  markerId: string;
+  name: string;
+  alias?: string;
+  status?: 'created' | 'removed' | 'changed';
+  changes: TurnSummaryChange[];
+}
+
+export interface EncounterTurnSummary {
+  id: string;
+  at: string;
+  baselineAt: string;
+  round: number;
+  isTemp: boolean;
+  subjectLabel: string;
+  units: UnitTurnSummary[];
+  markers: MarkerTurnSummary[];
+  hasChanges: boolean;
+}
+
 export interface EncounterState {
   id: string;
   units: Unit[];
@@ -145,6 +237,9 @@ export interface EncounterState {
   tempTurnStack?: string[];
 
   logs?: EncounterLogEntry[];
+  turnSummaryBaselines?: FieldTurnSummaryBaseline[];
+  currentTurnSummary?: EncounterTurnSummary;
+  latestTurnSummary?: EncounterTurnSummary;
 
   // encounter별 기본 publish 채널
   publish?: {

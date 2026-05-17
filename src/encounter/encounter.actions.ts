@@ -16,6 +16,13 @@ import {
   LogKind,
   HpFormula,
   TurnEndSnapshot,
+  FieldTurnSummaryBaseline,
+  MarkerTurnSummarySnapshot,
+  UnitTurnSummarySnapshot,
+  EncounterTurnSummary,
+  TurnSummaryChange,
+  UnitTurnSummary,
+  MarkerTurnSummary,
 } from './encounter.types';
 import {
   getComputedIntegrity,
@@ -298,6 +305,7 @@ export function applyAction(
 ): EncounterState {
   const next: EncounterState = structuredClone(state);
   applyActionInPlace(next, action);
+  refreshCurrentTurnSummary(next);
   return touch(next);
 }
 
@@ -307,6 +315,7 @@ export function applyActions(
 ): EncounterState {
   const next: EncounterState = structuredClone(state);
   for (const a of actions) applyActionInPlace(next, a);
+  refreshCurrentTurnSummary(next);
   return touch(next);
 }
 
@@ -325,6 +334,9 @@ export function applyActionInPlace(
       state.turnStartSnapshots = {};
       state.tempTurnStack = [];
       delete state.tempTurnStack;
+      state.turnSummaryBaselines = [];
+      delete state.currentTurnSummary;
+      delete state.latestTurnSummary;
 
       pushLog(
         state,
@@ -359,6 +371,7 @@ export function applyActionInPlace(
       const msg = firstName ? `전투 개시. 첫 턴: ${firstName}.` : '전투 개시.';
       pushLog(state, 'ACTION', msg, action, makeLogCtx(state));
       captureTurnStartSnapshot(state, firstEntry);
+      startTurnSummaryBaseline(state, false, firstName ?? 'Turn');
       return;
     }
     case 'SET_SIDE_NOTES': {
@@ -758,6 +771,7 @@ export function applyActionInPlace(
       applyServantTagDecays(state, id, 'start', action, ctxTemp, {
         allowCasterDecay: false,
       });
+      startTurnSummaryBaseline(state, true, ctxTemp.unitName ?? id);
 
       return;
     }
@@ -809,6 +823,9 @@ export function applyActionInPlace(
 
       // 2) 임시 턴이면: pop 후 "재개" (턴오더 진행 X, start 감소 X)
       if (state.tempTurnStack?.length) {
+        completeTurnSummary(state);
+        state.turnSummaryBaselines?.pop();
+        if (state.turnSummaryBaselines?.length === 0) delete state.turnSummaryBaselines;
         state.tempTurnStack.pop();
         if (state.tempTurnStack.length === 0) delete state.tempTurnStack;
 
@@ -870,6 +887,7 @@ export function applyActionInPlace(
       if (markerIds.length) {
         tickMarkersOnPass(state, markerIds, action, ctxBefore);
       }
+      completeTurnSummary(state);
 
       // 5) 다음 유닛 "턴 시작" 자동감소
       const nextEntry = order[nextTi];
@@ -893,6 +911,11 @@ export function applyActionInPlace(
       }
 
       captureTurnStartSnapshot(state, nextEntry);
+      startTurnSummaryBaseline(
+        state,
+        false,
+        nextEntry ? turnEntryLabel(state, nextEntry) ?? 'Turn' : 'Turn',
+      );
 
       return;
     }
@@ -2923,6 +2946,446 @@ function captureTurnStartSnapshot(state: EncounterState, entry: TurnEntry | null
     for (const unit of units) applySnapshot(unit);
   }
 }
+
+function startTurnSummaryBaseline(
+  state: EncounterState,
+  isTemp: boolean,
+  subjectLabel: string,
+) {
+  const baseline = buildFieldTurnSummaryBaseline(state, isTemp, subjectLabel);
+  if (isTemp) {
+    state.turnSummaryBaselines ??= [];
+    state.turnSummaryBaselines.push(baseline);
+  } else {
+    state.turnSummaryBaselines = [baseline];
+  }
+  state.currentTurnSummary = buildEncounterTurnSummary(state, baseline);
+}
+
+function completeTurnSummary(state: EncounterState) {
+  refreshCurrentTurnSummary(state);
+  if (state.currentTurnSummary) {
+    state.latestTurnSummary = state.currentTurnSummary;
+  }
+}
+
+function refreshCurrentTurnSummary(state: EncounterState) {
+  const baseline = getActiveTurnSummaryBaseline(state);
+  if (!baseline) {
+    delete state.currentTurnSummary;
+    return;
+  }
+  state.currentTurnSummary = buildEncounterTurnSummary(state, baseline);
+}
+
+function getActiveTurnSummaryBaseline(
+  state: EncounterState,
+): FieldTurnSummaryBaseline | null {
+  const stack = state.turnSummaryBaselines;
+  if (!Array.isArray(stack) || stack.length === 0) return null;
+  const baseline = stack[stack.length - 1];
+  return baseline && typeof baseline === 'object' ? baseline : null;
+}
+
+function buildFieldTurnSummaryBaseline(
+  state: EncounterState,
+  isTemp: boolean,
+  subjectLabel: string,
+): FieldTurnSummaryBaseline {
+  const units: Record<string, UnitTurnSummarySnapshot> = {};
+  for (const unit of state.units ?? []) {
+    units[unit.id] = snapshotUnitForTurnSummary(unit);
+  }
+
+  const markers: Record<string, MarkerTurnSummarySnapshot> = {};
+  for (const marker of state.markers ?? []) {
+    markers[marker.id] = snapshotMarkerForTurnSummary(marker);
+  }
+
+  return {
+    id: randomUUID(),
+    at: new Date().toISOString(),
+    round: Math.max(1, Math.floor(Number((state as any).round ?? 1))),
+    isTemp,
+    subjectLabel: subjectLabel || 'Turn',
+    units,
+    markers,
+  };
+}
+
+function snapshotUnitForTurnSummary(unit: Unit): UnitTurnSummarySnapshot {
+  const tagStates = unit.tagStates ?? {};
+  const stackNames = new Set(Object.keys(tagStates));
+  return {
+    id: unit.id,
+    name: unit.name,
+    ...(unit.alias ? { alias: unit.alias } : {}),
+    side: unit.side,
+    ...((unit as any).bench ? { bench: (unit as any).bench } : {}),
+    ...(typeof unit.colorCode === 'number' ? { colorCode: unit.colorCode } : {}),
+    ...(unit.hp
+      ? {
+          hp: {
+            cur: safeInt(unit.hp.cur),
+            max: safeInt(unit.hp.max),
+            ...(safeInt(unit.hp.temp ?? 0) > 0
+              ? { temp: safeInt(unit.hp.temp ?? 0) }
+              : {}),
+          },
+        }
+      : {}),
+    ...(unit.deathSaves
+      ? {
+          deathSaves: {
+            success: safeInt(unit.deathSaves.success),
+            failure: safeInt(unit.deathSaves.failure),
+          },
+        }
+      : {}),
+    spellSlots: normalizeNumberRecord(unit.spellSlots as any),
+    consumables: normalizeNumberRecord(unit.consumables),
+    toggleTags: (unit.tags ?? [])
+      .map((tag) => String(tag ?? '').trim())
+      .filter((tag) => tag && !stackNames.has(tag))
+      .sort((a, b) => a.localeCompare(b)),
+    stackTags: Object.fromEntries(
+      Object.entries(tagStates)
+        .map(([name, state]) => {
+          const key = String(name ?? '').trim();
+          if (!key) return null;
+          return [
+            key,
+            {
+              stacks: Math.max(0, safeInt((state as any)?.stacks ?? 0)),
+              ...((state as any)?.decOnTurnStart
+                ? { decOnTurnStart: true }
+                : {}),
+              ...((state as any)?.decOnTurnEnd ? { decOnTurnEnd: true } : {}),
+              ...((state as any)?.decByCaster ? { decByCaster: true } : {}),
+              ...((state as any)?.sourceUnitId
+                ? { sourceUnitId: String((state as any).sourceUnitId) }
+                : {}),
+            },
+          ] as const;
+        })
+        .filter((entry): entry is readonly [string, UnitTurnSummarySnapshot['stackTags'][string]] => !!entry)
+        .sort((a, b) => a[0].localeCompare(b[0])),
+    ),
+  };
+}
+
+function snapshotMarkerForTurnSummary(marker: any): MarkerTurnSummarySnapshot {
+  const duration = safeInt(marker?.duration);
+  return {
+    id: String(marker?.id ?? ''),
+    name: String(marker?.name ?? marker?.id ?? ''),
+    ...(marker?.alias ? { alias: String(marker.alias) } : {}),
+    ...(marker?.pos
+      ? { pos: { x: safeInt(marker.pos.x), z: safeInt(marker.pos.z) } }
+      : {}),
+    ...(Array.isArray(marker?.cells)
+      ? {
+          cells: marker.cells
+            .map((cell: any) => ({ x: safeInt(cell?.x), z: safeInt(cell?.z) }))
+            .sort((a: Pos, b: Pos) => a.x - b.x || a.z - b.z),
+        }
+      : {}),
+    ...(Number.isFinite(duration) && duration > 0 ? { duration } : {}),
+  };
+}
+
+function buildEncounterTurnSummary(
+  state: EncounterState,
+  baseline: FieldTurnSummaryBaseline,
+): EncounterTurnSummary {
+  const currentUnits: Record<string, UnitTurnSummarySnapshot> = {};
+  for (const unit of state.units ?? []) {
+    currentUnits[unit.id] = snapshotUnitForTurnSummary(unit);
+  }
+
+  const currentMarkers: Record<string, MarkerTurnSummarySnapshot> = {};
+  for (const marker of state.markers ?? []) {
+    currentMarkers[marker.id] = snapshotMarkerForTurnSummary(marker);
+  }
+
+  const units = compareUnitSummaries(baseline.units, currentUnits);
+  const markers = compareMarkerSummaries(baseline.markers, currentMarkers);
+
+  return {
+    id: baseline.id,
+    at: new Date().toISOString(),
+    baselineAt: baseline.at,
+    round: baseline.round,
+    isTemp: baseline.isTemp,
+    subjectLabel: baseline.subjectLabel,
+    units,
+    markers,
+    hasChanges: units.length > 0 || markers.length > 0,
+  };
+}
+
+function compareUnitSummaries(
+  before: Record<string, UnitTurnSummarySnapshot>,
+  after: Record<string, UnitTurnSummarySnapshot>,
+) {
+  const ids = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort(
+    (a, b) => unitSummaryLabel(before[a] ?? after[a]).localeCompare(unitSummaryLabel(before[b] ?? after[b])),
+  );
+  const rows: UnitTurnSummary[] = [];
+
+  for (const id of ids) {
+    const prev = before[id];
+    const cur = after[id];
+    const ref = cur ?? prev;
+    if (!ref) continue;
+
+    const changes: TurnSummaryChange[] = [];
+    if (!prev && cur) {
+      changes.push({
+        kind: 'created',
+        label: '유닛',
+        before: '없음',
+        after: formatUnitSnapshot(cur),
+      });
+    } else if (prev && !cur) {
+      changes.push({
+        kind: 'removed',
+        label: '유닛',
+        before: formatUnitSnapshot(prev),
+        after: '없음',
+      });
+    } else if (prev && cur) {
+      pushValueChange(changes, 'hp', '체력', formatHpSummary(prev.hp), formatHpSummary(cur.hp));
+      pushValueChange(
+        changes,
+        'deathSaves',
+        '사망내성',
+        formatDeathSaveSummary(prev.deathSaves),
+        formatDeathSaveSummary(cur.deathSaves),
+      );
+      pushValueChange(
+        changes,
+        'spellSlots',
+        '주문슬롯',
+        formatNumberRecordSummary(prev.spellSlots),
+        formatNumberRecordSummary(cur.spellSlots),
+      );
+      pushValueChange(
+        changes,
+        'consumables',
+        '고유소모값',
+        formatNumberRecordSummary(prev.consumables),
+        formatNumberRecordSummary(cur.consumables),
+      );
+      pushValueChange(
+        changes,
+        'toggleTags',
+        '태그',
+        formatListSummary(prev.toggleTags),
+        formatListSummary(cur.toggleTags),
+      );
+      pushValueChange(
+        changes,
+        'stackTags',
+        '스택 태그',
+        formatStackTagsSummary(prev.stackTags),
+        formatStackTagsSummary(cur.stackTags),
+      );
+    }
+
+    if (changes.length > 0) {
+      rows.push({
+        unitId: id,
+        name: ref.name,
+        ...(ref.alias ? { alias: ref.alias } : {}),
+        side: ref.side,
+        ...(ref.bench ? { bench: ref.bench } : {}),
+        ...(typeof ref.colorCode === 'number' ? { colorCode: ref.colorCode } : {}),
+        status: !prev ? 'created' : !cur ? 'removed' : 'changed',
+        changes,
+      });
+    }
+  }
+
+  return rows;
+}
+
+function compareMarkerSummaries(
+  before: Record<string, MarkerTurnSummarySnapshot>,
+  after: Record<string, MarkerTurnSummarySnapshot>,
+) {
+  const ids = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort(
+    (a, b) => markerSummaryLabel(before[a] ?? after[a]).localeCompare(markerSummaryLabel(before[b] ?? after[b])),
+  );
+  const rows: MarkerTurnSummary[] = [];
+
+  for (const id of ids) {
+    const prev = before[id];
+    const cur = after[id];
+    const ref = cur ?? prev;
+    if (!ref) continue;
+
+    const changes: TurnSummaryChange[] = [];
+    if (!prev && cur) {
+      changes.push({
+        kind: 'created',
+        label: '마커',
+        before: '없음',
+        after: formatMarkerSnapshot(cur),
+      });
+    } else if (prev && !cur) {
+      changes.push({
+        kind: 'removed',
+        label: '마커',
+        before: formatMarkerSnapshot(prev),
+        after: '없음',
+      });
+    } else if (prev && cur) {
+      pushValueChange(changes, 'marker', '이름', markerSummaryLabel(prev), markerSummaryLabel(cur));
+      pushValueChange(changes, 'marker', '위치', formatPosSummary(prev.pos), formatPosSummary(cur.pos));
+      pushValueChange(changes, 'marker', '범위', formatCellsSummary(prev.cells), formatCellsSummary(cur.cells));
+      pushValueChange(
+        changes,
+        'marker',
+        '지속시간',
+        formatOptionalNumber(prev.duration),
+        formatOptionalNumber(cur.duration),
+      );
+    }
+
+    if (changes.length > 0) {
+      rows.push({
+        markerId: id,
+        name: ref.name,
+        ...(ref.alias ? { alias: ref.alias } : {}),
+        status: !prev ? 'created' : !cur ? 'removed' : 'changed',
+        changes,
+      });
+    }
+  }
+
+  return rows;
+}
+
+function pushValueChange(
+  changes: TurnSummaryChange[],
+  kind: TurnSummaryChange['kind'],
+  label: string,
+  before: string,
+  after: string,
+) {
+  if (before === after) return;
+  changes.push({ kind, label, before, after });
+}
+
+function safeInt(value: unknown): number {
+  const n = Math.trunc(Number(value ?? 0));
+  return Number.isFinite(n) ? n : 0;
+}
+
+function normalizeNumberRecord(input?: Record<string, number> | Record<number, number>) {
+  const out: Record<string, number> = {};
+  for (const [rawKey, rawValue] of Object.entries(input ?? {})) {
+    const key = String(rawKey ?? '').trim();
+    if (!key) continue;
+    const value = safeInt(rawValue);
+    if (value !== 0) out[key] = value;
+  }
+  return Object.fromEntries(
+    Object.entries(out).sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true })),
+  );
+}
+
+function unitSummaryLabel(unit?: UnitTurnSummarySnapshot): string {
+  if (!unit) return '';
+  return unit.alias ? `${unit.name} (${unit.alias})` : unit.name;
+}
+
+function markerSummaryLabel(marker?: MarkerTurnSummarySnapshot): string {
+  if (!marker) return '';
+  return marker.alias ? `${marker.name} (${marker.alias})` : marker.name;
+}
+
+function formatUnitSnapshot(unit: UnitTurnSummarySnapshot): string {
+  return [
+    unitSummaryLabel(unit),
+    formatHpSummary(unit.hp),
+    formatDeathSaveSummary(unit.deathSaves),
+  ]
+    .filter((part) => part && part !== '없음')
+    .join(', ');
+}
+
+function formatMarkerSnapshot(marker: MarkerTurnSummarySnapshot): string {
+  return [
+    markerSummaryLabel(marker),
+    formatPosSummary(marker.pos),
+    formatCellsSummary(marker.cells),
+    marker.duration ? `duration ${marker.duration}` : '',
+  ]
+    .filter((part) => part && part !== '없음')
+    .join(', ');
+}
+
+function formatHpSummary(hp?: { cur: number; max: number; temp?: number }) {
+  if (!hp) return '없음';
+  const temp = safeInt(hp.temp ?? 0);
+  return temp > 0 ? `${hp.cur}/${hp.max} (+${temp})` : `${hp.cur}/${hp.max}`;
+}
+
+function formatDeathSaveSummary(deathSaves?: { success: number; failure: number }) {
+  if (!deathSaves) return '없음';
+  return `${safeInt(deathSaves.success)}S/${safeInt(deathSaves.failure)}F`;
+}
+
+function formatNumberRecordSummary(record?: Record<string, number>) {
+  const entries = Object.entries(record ?? {});
+  if (entries.length === 0) return '없음';
+  return entries
+    .sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }))
+    .map(([key, value]) => `${key}:${value}`)
+    .join(', ');
+}
+
+function formatListSummary(values?: string[]) {
+  const list = [...(values ?? [])].filter(Boolean).sort((a, b) => a.localeCompare(b));
+  return list.length ? list.join(', ') : '없음';
+}
+
+function formatStackTagsSummary(
+  tags?: UnitTurnSummarySnapshot['stackTags'],
+) {
+  const entries = Object.entries(tags ?? {});
+  if (entries.length === 0) return '없음';
+  return entries
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([name, state]) => {
+      const flags = [
+        state.decOnTurnStart ? 'start' : '',
+        state.decOnTurnEnd ? 'end' : '',
+        state.decByCaster ? 'caster' : '',
+      ].filter(Boolean);
+      return flags.length
+        ? `${name} x${state.stacks} (${flags.join('/')})`
+        : `${name} x${state.stacks}`;
+    })
+    .join(', ');
+}
+
+function formatPosSummary(pos?: Pos) {
+  if (!pos) return '없음';
+  return `x=${pos.x}, z=${pos.z}`;
+}
+
+function formatCellsSummary(cells?: Pos[]) {
+  if (!cells?.length) return '없음';
+  return cells.map((cell) => `(${cell.x},${cell.z})`).join(', ');
+}
+
+function formatOptionalNumber(value?: number) {
+  return Number.isFinite(value) && value !== undefined ? String(value) : '없음';
+}
+
 function fmtPos(p?: { x: number; z: number }) {
   if (!p) return '(x=?, z=?)';
   return `(x=${p.x}, z=${p.z})`;

@@ -929,7 +929,12 @@ export class WorldMapsService implements OnModuleInit {
       data.orientation = body.orientation;
     }
     if (body.cityGlobal !== undefined) {
-      data.cityGlobal = this.normalizeCityGlobalInput(body.cityGlobal);
+      const cityGlobal = this.normalizeCityGlobalForUpdate(
+        body.cityGlobal,
+        current.cityGlobal,
+      );
+      this.assertPopulationWithinCap(cityGlobal);
+      data.cityGlobal = cityGlobal;
     }
     if (body.tileStatePresets !== undefined) {
       data.tileStatePresets = this.normalizeTilePresetsInput(
@@ -1668,6 +1673,9 @@ export class WorldMapsService implements OnModuleInit {
       this.normalizeClientRunPrediction(clientPredictionInput);
     let summary = {
       days: 0,
+      attemptedDays: 0,
+      blocked: false,
+      blockedReason: undefined as string | undefined,
       appliedRules: 0,
       appliedActions: 0,
       failedRules: 0,
@@ -1693,8 +1701,14 @@ export class WorldMapsService implements OnModuleInit {
         undefined,
         true,
       );
+      const iterBlocked = (iter as any).blocked === true;
       summary = {
-        days: summary.days + 1,
+        days: summary.days + (iterBlocked ? 0 : 1),
+        attemptedDays: summary.attemptedDays + 1,
+        blocked: summary.blocked || iterBlocked,
+        blockedReason: iterBlocked
+          ? String((iter as any).blockedReason ?? 'failedRules')
+          : summary.blockedReason,
         appliedRules: summary.appliedRules + iter.appliedRules,
         appliedActions: summary.appliedActions + iter.appliedActions,
         failedRules: summary.failedRules + iter.failedRules,
@@ -1771,6 +1785,7 @@ export class WorldMapsService implements OnModuleInit {
           return next;
         })(),
       };
+      if (iterBlocked) break;
     }
     const runAudit =
       summary.dailyAudits.length > 0
@@ -1792,6 +1807,9 @@ export class WorldMapsService implements OnModuleInit {
         day: summary.day,
         summary: {
           days: summary.days,
+          attemptedDays: summary.attemptedDays,
+          blocked: summary.blocked,
+          blockedReason: summary.blockedReason,
           appliedRules: summary.appliedRules,
           appliedActions: summary.appliedActions,
           failedRules: summary.failedRules,
@@ -1872,8 +1890,8 @@ export class WorldMapsService implements OnModuleInit {
     });
 
     let cityGlobal = this.normalizeCityGlobalInput(mapRow.cityGlobal);
-    if (advanceDay) cityGlobal.day = Math.max(0, cityGlobal.day + 1);
     const auditBefore = this.createCityAuditSnapshot(cityGlobal);
+    if (advanceDay) cityGlobal.day = Math.max(0, cityGlobal.day + 1);
     const dailyPopulationPool = this.createPopulationAvailablePool(
       cityGlobal.population,
     );
@@ -1895,8 +1913,6 @@ export class WorldMapsService implements OnModuleInit {
       eventKind: 'onBuild' | 'onRemove' | 'daily' | 'sustain',
       options?: { skipDailyUpkeep?: boolean },
     ) => {
-      const effects = origin.preset?.effects;
-      if (!effects) return;
       if (!origin.preset) return;
       if (eventKind === 'daily' && !options?.skipDailyUpkeep) {
         const upkeepBefore = this.createCityAuditSnapshot(cityGlobal);
@@ -1938,6 +1954,8 @@ export class WorldMapsService implements OnModuleInit {
           });
         }
       }
+      const effects = origin.preset?.effects;
+      if (!effects) return;
       const rules =
         eventKind === 'onBuild'
           ? (effects.onBuild ?? [])
@@ -2207,9 +2225,26 @@ export class WorldMapsService implements OnModuleInit {
       }
     }
 
+    if (event === 'daily') {
+      const populationCapViolation =
+        this.getPopulationCapViolationReason(cityGlobal);
+      if (populationCapViolation) {
+        failedRules += 1;
+        logs.push({
+          instanceId: '__city_global__',
+          presetId: '__city_global__',
+          presetName: '도시 전역',
+          event: 'daily',
+          ruleId: '__population_cap__',
+          status: 'failed',
+          reason: populationCapViolation,
+        });
+      }
+    }
+
     // Population consumes food once per day. If food is insufficient,
     // spend gold by configured foodDeficitGoldRate for the deficit amount.
-    if (event === 'daily') {
+    if (event === 'daily' && failedRules <= 0) {
       const foodBefore = Math.max(
         0,
         Math.trunc(Number(cityGlobal.values.food ?? 0) || 0),
@@ -2260,6 +2295,31 @@ export class WorldMapsService implements OnModuleInit {
         delta: goldAfterOverflow - goldBeforeOverflow,
         reason: '일일 자원 초과분 금 환전',
       });
+    }
+
+    if (event === 'daily' && failedRules > 0) {
+      return {
+        day: auditBefore.day,
+        appliedRules,
+        appliedActions,
+        failedRules,
+        blocked: true,
+        blockedReason: 'failedRules',
+        foodRequired: 0,
+        foodConsumed: 0,
+        foodDeficit: 0,
+        foodGoldSpent: 0,
+        audit: this.createCityAuditSummary(auditBefore, auditBefore),
+        resourceChanges: {},
+        populationChanges: {},
+        resourceTraces: [],
+        resourceDeltaBreakdown: {},
+        logs,
+        overflowConvertedGold: 0,
+        overflowBeforeGold: null,
+        overflowAfterGold: null,
+        overflowDetails: [],
+      };
     }
 
     if (instancePatchById.size > 0) {
@@ -2795,10 +2855,7 @@ export class WorldMapsService implements OnModuleInit {
     if (action.kind === 'adjustPopulationCap') {
       const delta = Math.trunc(this.evalRuleExpr(action.delta, ctx));
       const current = Math.max(0, ctx.cityGlobal.populationCap ?? 0);
-      const totalPopulation = this.getTotalPopulation(
-        ctx.cityGlobal.population,
-      );
-      const next = Math.max(totalPopulation, current + delta);
+      const next = Math.max(0, current + delta);
       ctx.cityGlobal.populationCap = next;
       return delta !== 0;
     }
@@ -3001,6 +3058,59 @@ export class WorldMapsService implements OnModuleInit {
       Math.max(0, population.laborers?.total ?? 0) +
       Math.max(0, population.elderly?.total ?? 0)
     );
+  }
+
+  private assertPopulationWithinCap(cityGlobal: CityGlobalState) {
+    const reason = this.getPopulationCapViolationReason(cityGlobal);
+    if (reason) throw new BadRequestException(reason);
+  }
+
+  private getPopulationCapViolationReason(cityGlobal: CityGlobalState) {
+    const totalPopulation = this.getTotalPopulation(cityGlobal.population);
+    const populationCap = Math.max(
+      0,
+      Math.trunc(Number(cityGlobal.populationCap ?? 0) || 0),
+    );
+    if (totalPopulation <= populationCap) return '';
+    return `population exceeds cap (${totalPopulation}/${populationCap})`;
+  }
+
+  private normalizeCityGlobalForUpdate(
+    input: unknown,
+    currentInput: unknown,
+  ): CityGlobalState {
+    const next = this.normalizeCityGlobalInput(input);
+    const current = this.normalizeCityGlobalInput(currentInput);
+    const populationIn = this.toPlainRecord((input as any)?.population);
+    if (!populationIn) return next;
+
+    for (const id of POPULATION_IDS) {
+      const entryIn = this.toPlainRecord(populationIn[id]);
+      if (!entryIn) continue;
+      if (Object.prototype.hasOwnProperty.call(entryIn, 'available')) continue;
+
+      const currentEntry = current.population[id] ?? { total: 0, available: 0 };
+      const occupied = Math.max(
+        0,
+        Math.trunc(Number(currentEntry.total ?? 0) || 0) -
+          Math.trunc(Number(currentEntry.available ?? 0) || 0),
+      );
+      const nextEntry = next.population[id] ?? { total: 0, available: 0 };
+      const nextTotal = Math.max(
+        0,
+        Math.trunc(Number(nextEntry.total ?? 0) || 0),
+      );
+      if (nextTotal < occupied) {
+        throw new BadRequestException(
+          `${id} total is below allocated population (${nextTotal}/${occupied})`,
+        );
+      }
+      next.population[id] = {
+        total: nextTotal,
+        available: nextTotal - occupied,
+      };
+    }
+    return next;
   }
 
   private createCityAuditSnapshot(
@@ -5110,15 +5220,9 @@ export class WorldMapsService implements OnModuleInit {
         return { total, available };
       })(),
     };
-    const totalPopulation =
-      population.settlers.total +
-      population.engineers.total +
-      population.scholars.total +
-      population.laborers.total +
-      population.elderly.total;
-    const populationCap = Math.max(
-      totalPopulation,
-      toIntSafe(input?.populationCap, totalPopulation),
+    const populationCap = toIntSafe(
+      input?.populationCap,
+      DEFAULT_CITY_GLOBAL.populationCap,
     );
     return {
       values: {

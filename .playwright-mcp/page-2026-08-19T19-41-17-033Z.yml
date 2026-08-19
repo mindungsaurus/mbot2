@@ -1,0 +1,13 @@
+- generic [ref=e5]:
+  - generic [ref=e6]: Operator UI
+  - generic [ref=e7]: Login or register to continue
+  - generic [ref=e8]:
+    - generic [ref=e9]:
+      - generic [ref=e10]: Username
+      - textbox "username" [ref=e11]
+    - generic [ref=e12]:
+      - generic [ref=e13]: Password
+      - textbox "password" [ref=e14]
+  - generic [ref=e15]:
+    - button "Login" [ref=e16]
+    - button "Register" [ref=e17]

@@ -11,6 +11,8 @@ import { AuthModule } from './auth/auth.module';
 import { UnitPresetsModule } from './unit-presets/unit-presets.module';
 import { TagPresetsModule } from './tag-presets/tag-presets.module';
 import { WorldMapsModule } from './world-maps/world-maps.module';
+import { CharacterSheetsModule } from './character-sheets/character-sheets.module';
+import { SessionArchiveModule } from './session-archive/session-archive.module';
 
 function isDiscordBotEnabled() {
   const raw = String(process.env.DISCORD_BOT_ENABLED ?? 'true')
@@ -42,6 +44,8 @@ function isDiscordBotEnabled() {
     UnitPresetsModule,
     TagPresetsModule,
     WorldMapsModule,
+    CharacterSheetsModule,
+    SessionArchiveModule,
   ],
   controllers: [AppController],
   providers: [AppService],

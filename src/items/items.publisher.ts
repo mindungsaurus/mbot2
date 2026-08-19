@@ -4,9 +4,7 @@ import { ChannelType, Client, TextChannel } from 'discord.js';
 @Injectable()
 export class ItemsPublisher {
   private readonly logger = new Logger(ItemsPublisher.name);
-  constructor(
-    @Optional() @Inject(Client) private readonly client?: Client,
-  ) {}
+  constructor(@Optional() @Inject(Client) private readonly client?: Client) {}
 
   async sendAnsiToChannel(channelId: string, ansiText: string) {
     if (!channelId) return;
@@ -22,7 +20,7 @@ export class ItemsPublisher {
     if (channel.type !== ChannelType.GuildText)
       throw new Error(`not a guild text channel: ${channelId}`);
 
-    const text = channel as TextChannel;
+    const text = channel;
 
     for (const part of chunkByLines(ansiText, 1800)) {
       await text.send(wrapAnsi(part));

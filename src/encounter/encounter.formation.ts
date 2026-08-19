@@ -57,7 +57,10 @@ const IDENTIFIER_SYMBOLS = [
   ...Array.from({ length: 20 }, (_, i) => String(i + 1)),
 ].sort((a, b) => b.length - a.length);
 
-function splitIdentifierLabel(label: string): { base: string; suffix: string | null } {
+function splitIdentifierLabel(label: string): {
+  base: string;
+  suffix: string | null;
+} {
   const raw = (label ?? '').trim();
   if (!raw) return { base: raw, suffix: null };
 
@@ -263,7 +266,9 @@ export function buildDistanceMarkLines(
       const xs = Array.from(row.keys()).sort((a, b) => a - b);
       for (const x of xs) {
         const units = row.get(x) ?? [];
-        const labels = collapseUnitLabels(units, opts?.formatUnitLabel).filter(Boolean);
+        const labels = collapseUnitLabels(units, opts?.formatUnitLabel).filter(
+          Boolean,
+        );
         if (!labels.length) continue;
 
         const ix = Math.max(1, Math.floor(x - minX) + 1);
@@ -285,7 +290,9 @@ export function buildDistanceMarkLines(
     const leftMostX = xs[0];
     for (const x of xs) {
       const units = row.get(x) ?? [];
-      const labels = collapseUnitLabels(units, opts?.formatUnitLabel).filter(Boolean);
+      const labels = collapseUnitLabels(units, opts?.formatUnitLabel).filter(
+        Boolean,
+      );
       if (!labels.length) continue;
 
       const index = Math.max(1, Math.floor(Math.abs(x - leftMostX)) + 1);

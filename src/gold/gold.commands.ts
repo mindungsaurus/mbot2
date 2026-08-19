@@ -499,7 +499,7 @@ export class GoldCommands {
     @Context() [interaction]: SlashCommandContext,
     @Options() characterNameDTO: CharacterNameDTO,
   ) {
-    let curGold = 0;
+    const curGold = 0;
     let rows: (CharacterGold & {})[] = [];
 
     try {

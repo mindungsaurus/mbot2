@@ -79,20 +79,16 @@ type UpsertBuildingPresetBody = {
   placementRules?: BuildingPlacementRule[] | null;
   buildCost?: Partial<Record<BuildingResourceId, number>> | null;
   researchCost?: Partial<Record<BuildingResourceId, number>> | null;
-  upkeep?:
-    | {
-        resources?: Partial<Record<BuildingResourceId, number>>;
-        population?: Partial<Record<UpkeepPopulationId, number>>;
-      }
-    | null;
-  effects?:
-    | {
-        onBuild?: BuildingExecutionRule[];
-        daily?: BuildingExecutionRule[];
-        sustain?: BuildingExecutionRule[];
-        onRemove?: BuildingExecutionRule[];
-      }
-    | null;
+  upkeep?: {
+    resources?: Partial<Record<BuildingResourceId, number>>;
+    population?: Partial<Record<UpkeepPopulationId, number>>;
+  } | null;
+  effects?: {
+    onBuild?: BuildingExecutionRule[];
+    daily?: BuildingExecutionRule[];
+    sustain?: BuildingExecutionRule[];
+    onRemove?: BuildingExecutionRule[];
+  } | null;
 };
 
 type CreateBuildingInstanceBody = {
@@ -149,7 +145,10 @@ export class WorldMapsController {
   }
 
   @Post('shared/preset-folders')
-  createSharedPresetFolder(@Req() req: AuthRequest, @Body() body: UpsertPresetFolderBody) {
+  createSharedPresetFolder(
+    @Req() req: AuthRequest,
+    @Body() body: UpsertPresetFolderBody,
+  ) {
     return this.worldMaps.createSharedPresetFolder(req.user, body);
   }
 
@@ -163,12 +162,18 @@ export class WorldMapsController {
   }
 
   @Delete('shared/preset-folders/:folderId')
-  deleteSharedPresetFolder(@Req() req: AuthRequest, @Param('folderId') folderId: string) {
+  deleteSharedPresetFolder(
+    @Req() req: AuthRequest,
+    @Param('folderId') folderId: string,
+  ) {
     return this.worldMaps.deleteSharedPresetFolder(req.user, folderId);
   }
 
   @Post('shared/tile-presets')
-  createSharedTilePreset(@Req() req: AuthRequest, @Body() body: SharedTilePresetBody) {
+  createSharedTilePreset(
+    @Req() req: AuthRequest,
+    @Body() body: SharedTilePresetBody,
+  ) {
     return this.worldMaps.createSharedTilePreset(req.user, body);
   }
 
@@ -182,7 +187,10 @@ export class WorldMapsController {
   }
 
   @Delete('shared/tile-presets/:presetId')
-  deleteSharedTilePreset(@Req() req: AuthRequest, @Param('presetId') presetId: string) {
+  deleteSharedTilePreset(
+    @Req() req: AuthRequest,
+    @Param('presetId') presetId: string,
+  ) {
     return this.worldMaps.deleteSharedTilePreset(req.user, presetId);
   }
 
@@ -192,7 +200,10 @@ export class WorldMapsController {
   }
 
   @Post('shared/building-presets')
-  createSharedBuildingPreset(@Req() req: AuthRequest, @Body() body: UpsertBuildingPresetBody) {
+  createSharedBuildingPreset(
+    @Req() req: AuthRequest,
+    @Body() body: UpsertBuildingPresetBody,
+  ) {
     return this.worldMaps.createSharedBuildingPreset(req.user, body);
   }
 
@@ -206,7 +217,10 @@ export class WorldMapsController {
   }
 
   @Delete('shared/building-presets/:presetId')
-  deleteSharedBuildingPreset(@Req() req: AuthRequest, @Param('presetId') presetId: string) {
+  deleteSharedBuildingPreset(
+    @Req() req: AuthRequest,
+    @Param('presetId') presetId: string,
+  ) {
     return this.worldMaps.deleteSharedBuildingPreset(req.user, presetId);
   }
 
@@ -303,7 +317,12 @@ export class WorldMapsController {
     @Param('instanceId') instanceId: string,
     @Body() body: UpdateBuildingInstanceBody,
   ) {
-    return this.worldMaps.updateBuildingInstance(req.user, id, instanceId, body);
+    return this.worldMaps.updateBuildingInstance(
+      req.user,
+      id,
+      instanceId,
+      body,
+    );
   }
 
   @Delete(':id/buildings/:instanceId')
@@ -347,4 +366,3 @@ export class WorldMapsController {
     return this.worldMaps.runDaily(req.user, id, body?.days);
   }
 }
-

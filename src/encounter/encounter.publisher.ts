@@ -123,9 +123,7 @@ const IDENTIFIER_SYMBOLS = [
 export class EncounterPublisher {
   private readonly logger = new Logger(EncounterPublisher.name);
 
-  constructor(
-    @Optional() @Inject(Client) private readonly client?: Client,
-  ) {}
+  constructor(@Optional() @Inject(Client) private readonly client?: Client) {}
 
   async sendAnsiToChannel(
     channelId: string,
@@ -145,7 +143,7 @@ export class EncounterPublisher {
     if (channel.type !== ChannelType.GuildText)
       throw new Error(`not a guild text channel: ${channelId}`);
 
-    const text = channel as TextChannel;
+    const text = channel;
 
     // Discord 2000자 제한 대응: 줄 기준으로 쪼개서 여러 메시지로 보내기
     for (const part of chunkByLines(ansiText, 1800)) {
@@ -272,7 +270,8 @@ function renderBattleGridAttachment(
   const rowHeights: number[] = [];
   for (let r = 0; r < rows; r += 1) {
     const maxBadges = rowBadgeMax.get(r) ?? 0;
-    const unitPanelNeed = maxBadges > 0 ? maxBadges * (chipHForSizing + 2) + 8 : 0;
+    const unitPanelNeed =
+      maxBadges > 0 ? maxBadges * (chipHForSizing + 2) + 8 : 0;
     const markerNeed = rowHasMarker.get(r) ? markerBandH + markerGapH : 0;
     const need = unitPanelNeed + markerNeed;
     rowHeights.push(Math.max(cell, need));
@@ -383,7 +382,9 @@ function renderBattleGridAttachment(
     const chipH = Math.max(14, Math.floor(cell * 0.18));
     const chipW = cell - 8;
     const panelH = collapsed.length * (chipH + 2) + 4;
-    const reservedTop = rowHasMarker.get(rowIndex) ? markerBandH + markerGapH : 0;
+    const reservedTop = rowHasMarker.get(rowIndex)
+      ? markerBandH + markerGapH
+      : 0;
     const yBase = Math.max(py + reservedTop, py + rowH - panelH - 3);
 
     for (let i = 0; i < collapsed.length; i += 1) {
@@ -429,7 +430,9 @@ function renderBattleGridAttachment(
   return new AttachmentBuilder(buffer, { name: 'battle-grid.png' });
 }
 
-function collectMarkerPoints(markers: Marker[]): Array<{ x: number; z: number; label: string }> {
+function collectMarkerPoints(
+  markers: Marker[],
+): Array<{ x: number; z: number; label: string }> {
   const out: Array<{ x: number; z: number; label: string }> = [];
   for (const m of markers) {
     const label = (m.alias ?? '').trim() || m.name || m.id;
@@ -479,7 +482,10 @@ function shortText(v: string, max: number): string {
   return `${s.slice(0, Math.max(1, max - 1))}…`;
 }
 
-function splitIdentifierLabel(label: string): { base: string; suffix: string | null } {
+function splitIdentifierLabel(label: string): {
+  base: string;
+  suffix: string | null;
+} {
   const raw = (label ?? '').trim();
   if (!raw) return { base: raw, suffix: null };
 
@@ -497,13 +503,19 @@ function splitIdentifierLabel(label: string): { base: string; suffix: string | n
   return { base: raw, suffix: null };
 }
 
-function collapseUnitEntriesForCell(units: Unit[]): Array<{ unit: Unit; label: string }> {
+function collapseUnitEntriesForCell(
+  units: Unit[],
+): Array<{ unit: Unit; label: string }> {
   const entries = units.map((u) => ({
     unit: u,
     label: getUnitLabel(u),
   }));
-  const grouped: Array<{ unit: Unit; base: string; label: string; suffixes: string[] | null }> =
-    [];
+  const grouped: Array<{
+    unit: Unit;
+    base: string;
+    label: string;
+    suffixes: string[] | null;
+  }> = [];
   const groupIndex = new Map<string, number>();
 
   for (const entry of entries) {

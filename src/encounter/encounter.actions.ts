@@ -48,7 +48,22 @@ const IDENTIFIER_SCHEMES: IdentifierScheme[] = [
   {
     id: 'korean',
     label: 'Korean',
-    symbols: ['ㄱ', 'ㄴ', 'ㄷ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅅ', 'ㅇ', 'ㅈ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ'],
+    symbols: [
+      'ㄱ',
+      'ㄴ',
+      'ㄷ',
+      'ㄹ',
+      'ㅁ',
+      'ㅂ',
+      'ㅅ',
+      'ㅇ',
+      'ㅈ',
+      'ㅊ',
+      'ㅋ',
+      'ㅌ',
+      'ㅍ',
+      'ㅎ',
+    ],
   },
   {
     id: 'abc',
@@ -210,8 +225,8 @@ function normalizeMarkerCells(cells: any): Pos[] | undefined {
   for (const cell of cells) {
     if (!cell) continue;
 
-    const x = normPos((cell as any).x);
-    const z = normPos((cell as any).z);
+    const x = normPos(cell.x);
+    const z = normPos(cell.z);
     const key = `${x},${z}`;
 
     if (seen.has(key)) continue;
@@ -324,7 +339,6 @@ export function applyActionInPlace(
   action: Action,
 ): void {
   switch (action.type) {
-
     case 'RESET_ROUND': {
       const ctx = makeLogCtx(state);
       (state as any).round = 1;
@@ -365,8 +379,7 @@ export function applyActionInPlace(
         state.turnIndex = coerceTurnIndexToEntry(order, state.turnIndex, state);
       }
 
-      const firstEntry =
-        activeIdxs.length > 0 ? order[state.turnIndex] : null;
+      const firstEntry = activeIdxs.length > 0 ? order[state.turnIndex] : null;
       const firstName = firstEntry ? turnEntryLabel(state, firstEntry) : null;
       const msg = firstName ? `전투 개시. 첫 턴: ${firstName}.` : '전투 개시.';
       pushLog(state, 'ACTION', msg, action, makeLogCtx(state));
@@ -459,7 +472,6 @@ export function applyActionInPlace(
       );
       return;
     }
-
 
     case 'EDIT_MAX_HP': {
       const ctx = makeLogCtx(state);
@@ -655,7 +667,8 @@ export function applyActionInPlace(
         );
       }
 
-      if (nextSuccess === beforeSuccess && nextFailure === beforeFailure) return;
+      if (nextSuccess === beforeSuccess && nextFailure === beforeFailure)
+        return;
 
       u.deathSaves = { success: nextSuccess, failure: nextFailure };
 
@@ -787,7 +800,6 @@ export function applyActionInPlace(
       const activeEntry = active.entry;
       if (!activeEntry) return;
 
-
       // 1) 현재 턴 "종료" 자동감소 (+ 내역 수집)
       // 로그: 턴 종료
       pushLog(
@@ -816,7 +828,13 @@ export function applyActionInPlace(
           { allowCasterDecay: !ctxBefore.isTemp },
         );
       } else if (activeEntry.kind === 'group') {
-        applyGroupTurnDecays(state, activeEntry.groupId, 'end', action, ctxBefore);
+        applyGroupTurnDecays(
+          state,
+          activeEntry.groupId,
+          'end',
+          action,
+          ctxBefore,
+        );
       }
 
       captureTurnEndSnapshot(state, activeEntry);
@@ -825,7 +843,8 @@ export function applyActionInPlace(
       if (state.tempTurnStack?.length) {
         completeTurnSummary(state);
         state.turnSummaryBaselines?.pop();
-        if (state.turnSummaryBaselines?.length === 0) delete state.turnSummaryBaselines;
+        if (state.turnSummaryBaselines?.length === 0)
+          delete state.turnSummaryBaselines;
         state.tempTurnStack.pop();
         if (state.tempTurnStack.length === 0) delete state.tempTurnStack;
 
@@ -904,17 +923,35 @@ export function applyActionInPlace(
       );
 
       if (nextEntry?.kind === 'unit') {
-        applyUnitTurnTagDecays(state, nextEntry.unitId, 'start', action, ctxAfter);
-        applyServantTagDecays(state, nextEntry.unitId, 'start', action, ctxAfter);
+        applyUnitTurnTagDecays(
+          state,
+          nextEntry.unitId,
+          'start',
+          action,
+          ctxAfter,
+        );
+        applyServantTagDecays(
+          state,
+          nextEntry.unitId,
+          'start',
+          action,
+          ctxAfter,
+        );
       } else if (nextEntry?.kind === 'group') {
-        applyGroupTurnDecays(state, nextEntry.groupId, 'start', action, ctxAfter);
+        applyGroupTurnDecays(
+          state,
+          nextEntry.groupId,
+          'start',
+          action,
+          ctxAfter,
+        );
       }
 
       captureTurnStartSnapshot(state, nextEntry);
       startTurnSummaryBaseline(
         state,
         false,
-        nextEntry ? turnEntryLabel(state, nextEntry) ?? 'Turn' : 'Turn',
+        nextEntry ? (turnEntryLabel(state, nextEntry) ?? 'Turn') : 'Turn',
       );
 
       return;
@@ -1079,8 +1116,12 @@ export function applyActionInPlace(
             Object.prototype.hasOwnProperty.call(afterSlots, key);
 
           if (!beforeHas && !afterHas) continue;
-          const beforeVal = beforeHas ? normalizeSlot((beforeSlots as any)[key]) : undefined;
-          const afterVal = afterHas ? normalizeSlot((afterSlots as any)[key]) : undefined;
+          const beforeVal = beforeHas
+            ? normalizeSlot((beforeSlots as any)[key])
+            : undefined;
+          const afterVal = afterHas
+            ? normalizeSlot((afterSlots as any)[key])
+            : undefined;
           if (beforeHas && afterHas && beforeVal === afterVal) continue;
 
           diffs.push(
@@ -1221,11 +1262,10 @@ export function applyActionInPlace(
 
       const requestedX = normPos(action.x);
       const requestedZ = normPos(action.z);
-      const spawnPos =
-        findNearestOpenCell(state, requestedX, requestedZ) ?? {
-          x: requestedX,
-          z: requestedZ,
-        };
+      const spawnPos = findNearestOpenCell(state, requestedX, requestedZ) ?? {
+        x: requestedX,
+        z: requestedZ,
+      };
       const x = spawnPos.x;
       const z = spawnPos.z;
       if (isBlockedCell(state, x, z)) return;
@@ -1292,13 +1332,14 @@ export function applyActionInPlace(
         state.blockedCells.push({ x, z });
 
         const occupants = (state.units ?? []).filter(
-          (u) => !!u.pos && normPos(u.pos!.x) === x && normPos(u.pos!.z) === z,
+          (u) => !!u.pos && normPos(u.pos.x) === x && normPos(u.pos.z) === z,
         );
         const movedLines: string[] = [];
         for (const u of occupants) {
           if (!u.pos) continue;
           const nextPos =
-            findAdjacentOpenCell(state, x, z) ?? findNearestOpenCell(state, x, z);
+            findAdjacentOpenCell(state, x, z) ??
+            findNearestOpenCell(state, x, z);
           if (!nextPos) continue;
           const before = { ...u.pos };
           u.pos = { x: nextPos.x, z: nextPos.z };
@@ -1584,7 +1625,9 @@ export function applyActionInPlace(
         : getTurnEntryKey(active.entry);
 
       if (state.tempTurnStack?.length) {
-        state.tempTurnStack = state.tempTurnStack.filter((x) => !removeIds.has(x));
+        state.tempTurnStack = state.tempTurnStack.filter(
+          (x) => !removeIds.has(x),
+        );
         if (state.tempTurnStack.length === 0) delete state.tempTurnStack;
       }
 
@@ -1610,9 +1653,7 @@ export function applyActionInPlace(
 
       state.turnOrder = filtered;
 
-      const suffix = servantIds.length
-        ? ` (+서번트 ${servantIds.length})`
-        : '';
+      const suffix = servantIds.length ? ` (+서번트 ${servantIds.length})` : '';
 
       if (filtered.length === 0) {
         state.turnIndex = 0;
@@ -1642,7 +1683,11 @@ export function applyActionInPlace(
       }
 
       state.turnIndex = clampTurnIndex(filtered, state.turnIndex);
-      state.turnIndex = coerceTurnIndexToEntry(filtered, state.turnIndex, state);
+      state.turnIndex = coerceTurnIndexToEntry(
+        filtered,
+        state.turnIndex,
+        state,
+      );
       pushLog(
         state,
         'ACTION',
@@ -1739,9 +1784,7 @@ export function applyActionInPlace(
           return { entry: entry as TurnEntry, index, score };
         })
         .filter(
-          (
-            x,
-          ): x is { entry: TurnEntry; index: number; score: number } => !!x,
+          (x): x is { entry: TurnEntry; index: number; score: number } => !!x,
         )
         .sort((a, b) => b.score - a.score || a.index - b.index);
 
@@ -1852,7 +1895,8 @@ export function applyActionInPlace(
       state.turnOrder = nextOrder;
       const validPriorityKeys = new Set<string>();
       for (const entry of nextOrder) {
-        if (entry.kind === 'unit') validPriorityKeys.add(`unit:${entry.unitId}`);
+        if (entry.kind === 'unit')
+          validPriorityKeys.add(`unit:${entry.unitId}`);
         else if (entry.kind === 'group')
           validPriorityKeys.add(`group:${entry.groupId}`);
       }
@@ -1980,8 +2024,6 @@ export function applyActionInPlace(
       state.units = nextUnits;
       return;
     }
-
-
 
     case 'SET_UNIT_BENCH': {
       const ctx = makeLogCtx(state);
@@ -2194,7 +2236,10 @@ function normalizeUnitType(v: any): UnitType {
   return isUnitType(v) ? v : 'NORMAL';
 }
 
-function getTurnGroup(state: EncounterState, groupId: string): TurnGroup | null {
+function getTurnGroup(
+  state: EncounterState,
+  groupId: string,
+): TurnGroup | null {
   if (!groupId) return null;
   const groups = Array.isArray(state.turnGroups) ? state.turnGroups : [];
   return groups.find((g) => g.id === groupId) ?? null;
@@ -2205,7 +2250,10 @@ function groupLabel(state: EncounterState, groupId: string): string {
   return g?.name ?? groupId;
 }
 
-function turnEntryLabel(state: EncounterState, entry: TurnEntry): string | null {
+function turnEntryLabel(
+  state: EncounterState,
+  entry: TurnEntry,
+): string | null {
   if (entry.kind === 'unit') return unitLabel(state, entry.unitId);
   if (entry.kind === 'group') return groupLabel(state, entry.groupId);
   return null;
@@ -2268,7 +2316,10 @@ function normalizeTurnGroups(
   return out;
 }
 
-function removeGroupEntriesFromOrder(state: EncounterState, groupIds: Set<string>) {
+function removeGroupEntriesFromOrder(
+  state: EncounterState,
+  groupIds: Set<string>,
+) {
   if (!state.turnOrder?.length || groupIds.size === 0) return;
   state.turnOrder = state.turnOrder.filter((t) => {
     if (t?.kind === 'group') return !groupIds.has(t.groupId);
@@ -2401,7 +2452,10 @@ function getDisabledUnitIdsBetween(
     if (t?.kind === 'unit') {
       const u = state.units.find((x) => x.id === t.unitId);
       if (u) {
-        if (normalizeUnitType((u as any).unitType) === 'NORMAL' && u.turnDisabled) {
+        if (
+          normalizeUnitType((u as any).unitType) === 'NORMAL' &&
+          u.turnDisabled
+        ) {
           out.push(t.unitId);
         }
       }
@@ -2528,9 +2582,10 @@ function coerceTurnIndexToEntry(
   return entryIdxs[0];
 }
 
-function getActiveTurnEntry(
-  state: EncounterState,
-): { isTemp: boolean; entry: TurnEntry | null } {
+function getActiveTurnEntry(state: EncounterState): {
+  isTemp: boolean;
+  entry: TurnEntry | null;
+} {
   if (!state.battleStarted) return { isTemp: false, entry: null };
   const top = state.tempTurnStack?.length
     ? state.tempTurnStack[state.tempTurnStack.length - 1]
@@ -2594,7 +2649,9 @@ function decTurnTags(
     const decByCaster = !!(st as any).decByCaster;
     const sourceUnitId = String((st as any).sourceUnitId ?? '').trim() || null;
     const shouldDecay = decByCaster
-      ? !!sourceTurnUnitId && !!sourceUnitId && sourceTurnUnitId === sourceUnitId
+      ? !!sourceTurnUnitId &&
+        !!sourceUnitId &&
+        sourceTurnUnitId === sourceUnitId
       : !!holderTurnUnitId && holderTurnUnitId === u.id;
     if (!shouldDecay) continue;
 
@@ -2744,7 +2801,11 @@ function getActiveTurnCtx(state: EncounterState): {
   const entry = active.entry;
   if (!entry) return { isTemp: false, unitId: null };
   const entryId =
-    entry.kind === 'unit' ? entry.unitId : entry.kind === 'group' ? entry.groupId : null;
+    entry.kind === 'unit'
+      ? entry.unitId
+      : entry.kind === 'group'
+        ? entry.groupId
+        : null;
   return { isTemp: active.isTemp, unitId: entryId };
 }
 
@@ -2851,7 +2912,9 @@ function formatConsumablesSummary(
     .join(', ');
 }
 
-function buildTurnEndSnapshot(unit: Unit | null | undefined): TurnEndSnapshot | null {
+function buildTurnEndSnapshot(
+  unit: Unit | null | undefined,
+): TurnEndSnapshot | null {
   if (!unit) return null;
   const snap: TurnEndSnapshot = {};
   const slots = formatSpellSlotsSummary(unit.spellSlots as any);
@@ -2894,7 +2957,10 @@ function buildTurnEndSnapshot(unit: Unit | null | undefined): TurnEndSnapshot | 
   return snap;
 }
 
-function captureTurnEndSnapshot(state: EncounterState, entry: TurnEntry | null | undefined) {
+function captureTurnEndSnapshot(
+  state: EncounterState,
+  entry: TurnEntry | null | undefined,
+) {
   if (!entry) return;
   state.turnEndSnapshots ??= {};
 
@@ -2920,8 +2986,10 @@ function captureTurnEndSnapshot(state: EncounterState, entry: TurnEntry | null |
   }
 }
 
-
-function captureTurnStartSnapshot(state: EncounterState, entry: TurnEntry | null | undefined) {
+function captureTurnStartSnapshot(
+  state: EncounterState,
+  entry: TurnEntry | null | undefined,
+) {
   if (!entry) return;
   (state as any).turnStartSnapshots ??= {};
 
@@ -3022,7 +3090,9 @@ function snapshotUnitForTurnSummary(unit: Unit): UnitTurnSummarySnapshot {
     ...(unit.alias ? { alias: unit.alias } : {}),
     side: unit.side,
     ...((unit as any).bench ? { bench: (unit as any).bench } : {}),
-    ...(typeof unit.colorCode === 'number' ? { colorCode: unit.colorCode } : {}),
+    ...(typeof unit.colorCode === 'number'
+      ? { colorCode: unit.colorCode }
+      : {}),
     ...(unit.hp
       ? {
           hp: {
@@ -3068,7 +3138,14 @@ function snapshotUnitForTurnSummary(unit: Unit): UnitTurnSummarySnapshot {
             },
           ] as const;
         })
-        .filter((entry): entry is readonly [string, UnitTurnSummarySnapshot['stackTags'][string]] => !!entry)
+        .filter(
+          (
+            entry,
+          ): entry is readonly [
+            string,
+            UnitTurnSummarySnapshot['stackTags'][string],
+          ] => !!entry,
+        )
         .sort((a, b) => a[0].localeCompare(b[0])),
     ),
   };
@@ -3128,8 +3205,12 @@ function compareUnitSummaries(
   before: Record<string, UnitTurnSummarySnapshot>,
   after: Record<string, UnitTurnSummarySnapshot>,
 ) {
-  const ids = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort(
-    (a, b) => unitSummaryLabel(before[a] ?? after[a]).localeCompare(unitSummaryLabel(before[b] ?? after[b])),
+  const ids = [
+    ...new Set([...Object.keys(before), ...Object.keys(after)]),
+  ].sort((a, b) =>
+    unitSummaryLabel(before[a] ?? after[a]).localeCompare(
+      unitSummaryLabel(before[b] ?? after[b]),
+    ),
   );
   const rows: UnitTurnSummary[] = [];
 
@@ -3155,7 +3236,13 @@ function compareUnitSummaries(
         after: '없음',
       });
     } else if (prev && cur) {
-      pushValueChange(changes, 'hp', '체력', formatHpSummary(prev.hp), formatHpSummary(cur.hp));
+      pushValueChange(
+        changes,
+        'hp',
+        '체력',
+        formatHpSummary(prev.hp),
+        formatHpSummary(cur.hp),
+      );
       pushValueChange(
         changes,
         'deathSaves',
@@ -3200,7 +3287,9 @@ function compareUnitSummaries(
         ...(ref.alias ? { alias: ref.alias } : {}),
         side: ref.side,
         ...(ref.bench ? { bench: ref.bench } : {}),
-        ...(typeof ref.colorCode === 'number' ? { colorCode: ref.colorCode } : {}),
+        ...(typeof ref.colorCode === 'number'
+          ? { colorCode: ref.colorCode }
+          : {}),
         status: !prev ? 'created' : !cur ? 'removed' : 'changed',
         changes,
       });
@@ -3214,8 +3303,12 @@ function compareMarkerSummaries(
   before: Record<string, MarkerTurnSummarySnapshot>,
   after: Record<string, MarkerTurnSummarySnapshot>,
 ) {
-  const ids = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort(
-    (a, b) => markerSummaryLabel(before[a] ?? after[a]).localeCompare(markerSummaryLabel(before[b] ?? after[b])),
+  const ids = [
+    ...new Set([...Object.keys(before), ...Object.keys(after)]),
+  ].sort((a, b) =>
+    markerSummaryLabel(before[a] ?? after[a]).localeCompare(
+      markerSummaryLabel(before[b] ?? after[b]),
+    ),
   );
   const rows: MarkerTurnSummary[] = [];
 
@@ -3241,9 +3334,27 @@ function compareMarkerSummaries(
         after: '없음',
       });
     } else if (prev && cur) {
-      pushValueChange(changes, 'marker', '이름', markerSummaryLabel(prev), markerSummaryLabel(cur));
-      pushValueChange(changes, 'marker', '위치', formatPosSummary(prev.pos), formatPosSummary(cur.pos));
-      pushValueChange(changes, 'marker', '범위', formatCellsSummary(prev.cells), formatCellsSummary(cur.cells));
+      pushValueChange(
+        changes,
+        'marker',
+        '이름',
+        markerSummaryLabel(prev),
+        markerSummaryLabel(cur),
+      );
+      pushValueChange(
+        changes,
+        'marker',
+        '위치',
+        formatPosSummary(prev.pos),
+        formatPosSummary(cur.pos),
+      );
+      pushValueChange(
+        changes,
+        'marker',
+        '범위',
+        formatCellsSummary(prev.cells),
+        formatCellsSummary(cur.cells),
+      );
       pushValueChange(
         changes,
         'marker',
@@ -3283,7 +3394,9 @@ function safeInt(value: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-function normalizeNumberRecord(input?: Record<string, number> | Record<number, number>) {
+function normalizeNumberRecord(
+  input?: Record<string, number> | Record<number, number>,
+) {
   const out: Record<string, number> = {};
   for (const [rawKey, rawValue] of Object.entries(input ?? {})) {
     const key = String(rawKey ?? '').trim();
@@ -3292,7 +3405,9 @@ function normalizeNumberRecord(input?: Record<string, number> | Record<number, n
     if (value !== 0) out[key] = value;
   }
   return Object.fromEntries(
-    Object.entries(out).sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true })),
+    Object.entries(out).sort((a, b) =>
+      a[0].localeCompare(b[0], undefined, { numeric: true }),
+    ),
   );
 }
 
@@ -3333,7 +3448,10 @@ function formatHpSummary(hp?: { cur: number; max: number; temp?: number }) {
   return temp > 0 ? `${hp.cur}/${hp.max} (+${temp})` : `${hp.cur}/${hp.max}`;
 }
 
-function formatDeathSaveSummary(deathSaves?: { success: number; failure: number }) {
+function formatDeathSaveSummary(deathSaves?: {
+  success: number;
+  failure: number;
+}) {
   if (!deathSaves) return '없음';
   return `${safeInt(deathSaves.success)}S/${safeInt(deathSaves.failure)}F`;
 }
@@ -3348,13 +3466,13 @@ function formatNumberRecordSummary(record?: Record<string, number>) {
 }
 
 function formatListSummary(values?: string[]) {
-  const list = [...(values ?? [])].filter(Boolean).sort((a, b) => a.localeCompare(b));
+  const list = [...(values ?? [])]
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b));
   return list.length ? list.join(', ') : '없음';
 }
 
-function formatStackTagsSummary(
-  tags?: UnitTurnSummarySnapshot['stackTags'],
-) {
+function formatStackTagsSummary(tags?: UnitTurnSummarySnapshot['stackTags']) {
   const entries = Object.entries(tags ?? {});
   if (entries.length === 0) return '없음';
   return entries
@@ -3450,9 +3568,9 @@ function diffTagStates(
     const changes: string[] = [];
     if (bs.stacks !== as.stacks) changes.push(`${bs.stacks}→${as.stacks}`);
     if (!!bs.decOnTurnStart !== !!as.decOnTurnStart)
-      changes.push(`시작감소:${!!as.decOnTurnStart ? 'ON' : 'OFF'}`);
+      changes.push(`시작감소:${as.decOnTurnStart ? 'ON' : 'OFF'}`);
     if (!!bs.decOnTurnEnd !== !!as.decOnTurnEnd)
-      changes.push(`종료감소:${!!as.decOnTurnEnd ? 'ON' : 'OFF'}`);
+      changes.push(`종료감소:${as.decOnTurnEnd ? 'ON' : 'OFF'}`);
 
     if (changes.length) out.push(`${k} (${changes.join(', ')})`);
   }
@@ -3765,4 +3883,3 @@ function applyUnitPatch(u: Unit, patch: UnitPatch) {
     if (Object.keys(u.tagStates).length === 0) delete u.tagStates;
   }
 }
-

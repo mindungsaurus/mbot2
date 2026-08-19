@@ -1,11 +1,7 @@
 ﻿export type HexOrientation = 'pointy' | 'flat';
 
 export type CappedResourceId = 'wood' | 'stone' | 'fabric' | 'weave' | 'food';
-export type ResourceId =
-  | CappedResourceId
-  | 'research'
-  | 'order'
-  | 'gold';
+export type ResourceId = CappedResourceId | 'research' | 'order' | 'gold';
 export type BuildingResourceId = ResourceId | `item:${string}`;
 
 export type PopulationTrackedId =
@@ -102,18 +98,32 @@ export type BuildingRuleActionTargetScope = 'self' | 'range';
 export type BuildingRuleExpr =
   | { kind: 'const'; value: number }
   | { kind: 'resource'; resourceId: BuildingResourceId }
-  | { kind: 'population'; populationId: PopulationId; field: 'total' | 'available' }
+  | {
+      kind: 'population';
+      populationId: PopulationId;
+      field: 'total' | 'available';
+    }
   | {
       kind: 'tileMetric';
       metric: 'adjacentTagCount' | 'adjacentBuildingCount' | 'tileStateValue';
       key: string;
     }
-  | { kind: 'binary'; op: BuildingRuleArithmeticOp; left: BuildingRuleExpr; right: BuildingRuleExpr }
+  | {
+      kind: 'binary';
+      op: BuildingRuleArithmeticOp;
+      left: BuildingRuleExpr;
+      right: BuildingRuleExpr;
+    }
   | { kind: 'clamp'; value: BuildingRuleExpr; min?: number; max?: number }
   | { kind: 'randPct'; pct: number };
 
 export type BuildingRulePredicate =
-  | { kind: 'compare'; op: BuildingRuleComparisonOp; left: BuildingRuleExpr; right: BuildingRuleExpr }
+  | {
+      kind: 'compare';
+      op: BuildingRuleComparisonOp;
+      left: BuildingRuleExpr;
+      right: BuildingRuleExpr;
+    }
   | {
       kind: 'tileRegionCompare';
       field: 'spaceRemaining' | 'pollution' | 'threat' | 'satisfaction';
@@ -256,7 +266,11 @@ export type WorldMapBuildingPresetRow = {
   updatedAt: string;
 };
 
-export type WorldMapPresetFolderKind = 'tile' | 'building' | 'troop' | 'carriage';
+export type WorldMapPresetFolderKind =
+  | 'tile'
+  | 'building'
+  | 'troop'
+  | 'carriage';
 
 export type WorldMapPresetFolderRow = {
   id: string;
@@ -316,5 +330,3 @@ export type WorldMapRecord = {
 };
 
 export type PublicWorldMap = WorldMapRecord;
-
-

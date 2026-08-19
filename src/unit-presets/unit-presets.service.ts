@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { DiceService } from '../dice/dice.service';
 import {
@@ -93,7 +97,8 @@ export class UnitPresetsService {
     });
     if (!folder) throw new NotFoundException('folder not found');
 
-    const data: { name?: string; order?: number; parentId?: string | null } = {};
+    const data: { name?: string; order?: number; parentId?: string | null } =
+      {};
     if (body?.name !== undefined) {
       data.name = normalizeName(body?.name, DEFAULT_FOLDER_NAME);
     }
@@ -243,7 +248,9 @@ export class UnitPresetsService {
     const resolved = expr.replace(/\{([^}]+)\}/g, (_raw, keyRaw) => {
       const key = String(keyRaw ?? '').trim();
       if (!key) {
-        throw new BadRequestException('HP 공식의 파라미터 이름이 비어 있습니다.');
+        throw new BadRequestException(
+          'HP 공식의 파라미터 이름이 비어 있습니다.',
+        );
       }
       if (params[key] === undefined) {
         throw new BadRequestException(

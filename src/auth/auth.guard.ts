@@ -22,7 +22,7 @@ export class AuthGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest<AuthRequest>();
-    const token = parseBearer(req.headers?.authorization as string | undefined);
+    const token = parseBearer(req.headers?.authorization);
     if (!token) {
       throw new UnauthorizedException('인증 토큰이 필요합니다.');
     }

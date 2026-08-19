@@ -78,9 +78,7 @@ export class GoldService {
           dailyExpense: 0,
           isNpc: characterInfoDTO.isNpc,
           friend:
-            characterInfoDTO.isNpc && friendName.length > 0
-              ? friendName
-              : null,
+            characterInfoDTO.isNpc && friendName.length > 0 ? friendName : null,
         },
       });
     } catch (err: any) {
@@ -578,8 +576,8 @@ export class GoldService {
   public StringFormatter(
     sentence: string,
     color: TextColor,
-    isHead: Boolean,
-    isTail: Boolean,
+    isHead: boolean,
+    isTail: boolean,
   ): string {
     let colorParts = '';
     switch (color) {
@@ -625,7 +623,7 @@ export class GoldService {
     if (isHead) head = head = '```ansi\n';
     if (isTail) tail = ' ```';
 
-    let newString = head + colorParts + ' ' + sentence + tail;
+    const newString = head + colorParts + ' ' + sentence + tail;
     return newString;
   }
 

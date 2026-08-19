@@ -163,15 +163,14 @@ export class DiceService {
       );
       const canExact =
         dists.every((x) => x !== null) &&
-        this.estimateCombinationCount(dists as NonNullable<typeof dists>) <=
-          this.MAX_EXACT_COMBINATIONS;
+        this.estimateCombinationCount(dists) <= this.MAX_EXACT_COMBINATIONS;
 
       if (canExact) {
         return this.analyzeExact(
           expr,
           rpn,
           diceTerms,
-          dists as NonNullable<typeof dists>,
+          dists,
           target,
           comparator,
         );

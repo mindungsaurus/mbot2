@@ -6,9 +6,19 @@
   NotFoundException,
   OnModuleInit,
 } from '@nestjs/common';
-import { DeleteObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import {
+  DeleteObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from '@aws-sdk/client-s3';
 import { Prisma, PrismaClient } from '@prisma/client';
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { extname, join } from 'node:path';
 import type { AuthUser } from '../auth/auth.types';
@@ -92,20 +102,16 @@ type UpsertBuildingPresetBody = {
   placementRules?: BuildingPlacementRule[] | null;
   buildCost?: Partial<Record<BuildingResourceId, number>> | null;
   researchCost?: Partial<Record<BuildingResourceId, number>> | null;
-  upkeep?:
-    | {
-        resources?: Partial<Record<BuildingResourceId, number>>;
-        population?: Partial<Record<UpkeepPopulationId, number>>;
-      }
-    | null;
-  effects?:
-    | {
-        onBuild?: BuildingExecutionRule[];
-        daily?: BuildingExecutionRule[];
-        sustain?: BuildingExecutionRule[];
-        onRemove?: BuildingExecutionRule[];
-      }
-    | null;
+  upkeep?: {
+    resources?: Partial<Record<BuildingResourceId, number>>;
+    population?: Partial<Record<UpkeepPopulationId, number>>;
+  } | null;
+  effects?: {
+    onBuild?: BuildingExecutionRule[];
+    daily?: BuildingExecutionRule[];
+    sustain?: BuildingExecutionRule[];
+    onRemove?: BuildingExecutionRule[];
+  } | null;
 };
 
 type CreateBuildingInstanceBody = {
@@ -132,11 +138,18 @@ type RuntimeInstance = WorldMapBuildingInstanceRow & {
   preset?: WorldMapBuildingPresetRow;
 };
 
-const WORLD_MAP_PRESET_FOLDER_KINDS = ['tile', 'building', 'troop', 'carriage'] as const;
+const WORLD_MAP_PRESET_FOLDER_KINDS = [
+  'tile',
+  'building',
+  'troop',
+  'carriage',
+] as const;
 
 type OverflowConversionTracker = {
   convertedGold: number;
-  details: Partial<Record<CappedResourceId, { overflowAmount: number; goldGain: number }>>;
+  details: Partial<
+    Record<CappedResourceId, { overflowAmount: number; goldGain: number }>
+  >;
   beforeGold: number | null;
   afterGold: number | null;
 };
@@ -192,7 +205,13 @@ const RESOURCE_IDS: ResourceId[] = [
   'order',
   'gold',
 ];
-const CAPPED_RESOURCE_IDS: ResourceId[] = ['wood', 'stone', 'fabric', 'weave', 'food'];
+const CAPPED_RESOURCE_IDS: ResourceId[] = [
+  'wood',
+  'stone',
+  'fabric',
+  'weave',
+  'food',
+];
 const CAPPED_RESOURCE_SET = new Set<ResourceId>(CAPPED_RESOURCE_IDS);
 const RESOURCE_LABELS: Record<ResourceId, string> = {
   wood: '나무',
@@ -281,12 +300,17 @@ export class WorldMapsService implements OnModuleInit {
   private readonly assetDir = join(this.rootDir, 'assets');
   private readonly legacyMetaPath = join(this.rootDir, 'maps.json');
   private readonly imageStorageDriver: ImageStorageDriver =
-    (String(process.env.WORLD_MAP_IMAGE_STORAGE ?? 'local').trim().toLowerCase() as ImageStorageDriver) ===
-    'r2'
+    (String(process.env.WORLD_MAP_IMAGE_STORAGE ?? 'local')
+      .trim()
+      .toLowerCase() as ImageStorageDriver) === 'r2'
       ? 'r2'
       : 'local';
   private readonly r2Bucket = String(process.env.R2_BUCKET ?? '').trim();
-  private readonly r2PublicBaseUrl = String(process.env.R2_PUBLIC_BASE_URL ?? '').trim().replace(/\/+$/, '');
+  private readonly r2PublicBaseUrl = String(
+    process.env.R2_PUBLIC_BASE_URL ?? '',
+  )
+    .trim()
+    .replace(/\/+$/, '');
   private readonly r2Client: S3Client | null = this.createR2Client();
 
   constructor(private readonly prisma: PrismaClient) {
@@ -307,11 +331,19 @@ export class WorldMapsService implements OnModuleInit {
     // 1) Tile presets: world map json(field) -> shared table
     let tileCreated = 0;
     try {
-      const sharedTileRows = await this.prisma.worldMapTileStatePreset.findMany({
-        select: { name: true },
-      });
+      const sharedTileRows = await this.prisma.worldMapTileStatePreset.findMany(
+        {
+          select: { name: true },
+        },
+      );
       const sharedTileNameKey = new Set(
-        sharedTileRows.map((row) => String(row.name ?? '').trim().toLowerCase()).filter(Boolean),
+        sharedTileRows
+          .map((row) =>
+            String(row.name ?? '')
+              .trim()
+              .toLowerCase(),
+          )
+          .filter(Boolean),
       );
       const maps = await this.prisma.worldMap.findMany({
         select: { id: true, tileStatePresets: true },
@@ -346,12 +378,15 @@ export class WorldMapsService implements OnModuleInit {
     // 2) Building presets: map-scoped rows -> shared rows(mapId = null)
     let buildingCreated = 0;
     try {
-      const sharedBuildingRows = await this.prisma.worldMapBuildingPreset.findMany({
-        where: { mapId: null },
-        select: { name: true, tier: true },
-      });
+      const sharedBuildingRows =
+        await this.prisma.worldMapBuildingPreset.findMany({
+          where: { mapId: null },
+          select: { name: true, tier: true },
+        });
       const sharedBuildingKey = new Set(
-        sharedBuildingRows.map((row) => this.makeBuildingSharedKey(row.name, row.tier)),
+        sharedBuildingRows.map((row) =>
+          this.makeBuildingSharedKey(row.name, row.tier),
+        ),
       );
       const localRows = await this.prisma.worldMapBuildingPreset.findMany({
         where: { NOT: { mapId: null } },
@@ -372,7 +407,9 @@ export class WorldMapsService implements OnModuleInit {
               effort: this.toNullableIntMin(row.effort, 0),
               space: this.toNullableIntMin(row.space, 0),
               description: String(row.description ?? '').trim() || null,
-              placementRules: this.normalizePlacementRulesInput(row.placementRules),
+              placementRules: this.normalizePlacementRulesInput(
+                row.placementRules,
+              ),
               buildCost: this.normalizeResourceCostsInput(row.buildCost),
               researchCost: this.normalizeResourceCostsInput(row.researchCost),
               upkeep: this.normalizeUpkeepInput(row.upkeep),
@@ -399,8 +436,12 @@ export class WorldMapsService implements OnModuleInit {
   }
 
   private makeBuildingSharedKey(name: unknown, tier: unknown) {
-    const n = String(name ?? '').trim().toLowerCase();
-    const t = String(tier ?? '').trim().toLowerCase();
+    const n = String(name ?? '')
+      .trim()
+      .toLowerCase();
+    const t = String(tier ?? '')
+      .trim()
+      .toLowerCase();
     return `${n}::${t}`;
   }
 
@@ -428,7 +469,9 @@ export class WorldMapsService implements OnModuleInit {
     _user: AuthUser,
     kind?: WorldMapPresetFolderKind,
   ): Promise<WorldMapPresetFolderRow[]> {
-    const normalizedKind = kind ? this.normalizePresetFolderKind(kind) : undefined;
+    const normalizedKind = kind
+      ? this.normalizePresetFolderKind(kind)
+      : undefined;
     const rows = await this.prisma.worldMapPresetFolder.findMany({
       where: normalizedKind ? { kind: normalizedKind } : undefined,
       orderBy: [{ order: 'asc' }, { updatedAt: 'desc' }],
@@ -442,7 +485,11 @@ export class WorldMapsService implements OnModuleInit {
   ): Promise<WorldMapPresetFolderRow> {
     this.requireAdmin(user);
     const kind = this.normalizePresetFolderKind(body?.kind);
-    const parentId = await this.resolvePresetFolderParentId(body?.parentId, kind, null);
+    const parentId = await this.resolvePresetFolderParentId(
+      body?.parentId,
+      kind,
+      null,
+    );
     const row = await this.prisma.worldMapPresetFolder.create({
       data: {
         kind,
@@ -460,13 +507,21 @@ export class WorldMapsService implements OnModuleInit {
     body: UpsertPresetFolderBody,
   ): Promise<WorldMapPresetFolderRow> {
     this.requireAdmin(user);
-    const current = await this.prisma.worldMapPresetFolder.findUnique({ where: { id: folderId } });
+    const current = await this.prisma.worldMapPresetFolder.findUnique({
+      where: { id: folderId },
+    });
     if (!current) throw new NotFoundException('preset folder not found');
     const data: Record<string, unknown> = {};
-    if (body?.name !== undefined) data.name = this.normalizePresetFolderName(body.name);
-    if (body?.order !== undefined) data.order = this.normalizePresetFolderOrder(body.order);
+    if (body?.name !== undefined)
+      data.name = this.normalizePresetFolderName(body.name);
+    if (body?.order !== undefined)
+      data.order = this.normalizePresetFolderOrder(body.order);
     if (body?.parentId !== undefined) {
-      data.parentId = await this.resolvePresetFolderParentId(body.parentId, current.kind as any, current.id);
+      data.parentId = await this.resolvePresetFolderParentId(
+        body.parentId,
+        current.kind as any,
+        current.id,
+      );
     }
     const row = await this.prisma.worldMapPresetFolder.update({
       where: { id: folderId },
@@ -500,7 +555,10 @@ export class WorldMapsService implements OnModuleInit {
     return { ok: true };
   }
 
-  async createSharedTilePreset(user: AuthUser, body: SharedTilePresetBody): Promise<MapTileStatePreset> {
+  async createSharedTilePreset(
+    user: AuthUser,
+    body: SharedTilePresetBody,
+  ): Promise<MapTileStatePreset> {
     this.requireAdmin(user);
     const name = String(body?.name ?? '').trim();
     if (!name) throw new BadRequestException('tile preset name required');
@@ -534,7 +592,8 @@ export class WorldMapsService implements OnModuleInit {
       if (!name) throw new BadRequestException('tile preset name required');
       data.name = name;
     }
-    if (body.color !== undefined) data.color = this.normalizeHexColor(body.color, '#e5e7eb');
+    if (body.color !== undefined)
+      data.color = this.normalizeHexColor(body.color, '#e5e7eb');
     if (body.hasValue !== undefined) data.hasValue = !!body.hasValue;
     if (body.folderId !== undefined) {
       data.folderId = await this.resolvePresetFolderId(body.folderId, 'tile');
@@ -553,11 +612,15 @@ export class WorldMapsService implements OnModuleInit {
       select: { id: true },
     });
     if (!current) throw new NotFoundException('shared tile preset not found');
-    await this.prisma.worldMapTileStatePreset.delete({ where: { id: presetId } });
+    await this.prisma.worldMapTileStatePreset.delete({
+      where: { id: presetId },
+    });
     const sharedRows = await this.prisma.worldMapTileStatePreset.findMany({
       orderBy: [{ name: 'asc' }, { createdAt: 'asc' }],
     });
-    const sharedPresets = sharedRows.map((row) => this.toSharedTilePresetRow(row));
+    const sharedPresets = sharedRows.map((row) =>
+      this.toSharedTilePresetRow(row),
+    );
 
     const maps = await this.prisma.worldMap.findMany({
       select: { id: true, tileStateAssignments: true },
@@ -585,7 +648,9 @@ export class WorldMapsService implements OnModuleInit {
     return { ok: true };
   }
 
-  async listSharedBuildingPresets(_user: AuthUser): Promise<WorldMapBuildingPresetRow[]> {
+  async listSharedBuildingPresets(
+    _user: AuthUser,
+  ): Promise<WorldMapBuildingPresetRow[]> {
     const rows = await this.prisma.worldMapBuildingPreset.findMany({
       where: { mapId: null },
       orderBy: [{ name: 'asc' }, { createdAt: 'asc' }],
@@ -601,8 +666,13 @@ export class WorldMapsService implements OnModuleInit {
     const name = String(body?.name ?? '').trim();
     if (!name) throw new BadRequestException('building preset name required');
     const folderKind =
-      body?.folderKind == null ? undefined : this.normalizePresetFolderKind(body.folderKind);
-    const folderId = await this.resolvePresetFolderId(body?.folderId, folderKind);
+      body?.folderKind == null
+        ? undefined
+        : this.normalizePresetFolderKind(body.folderKind);
+    const folderId = await this.resolvePresetFolderId(
+      body?.folderId,
+      folderKind,
+    );
     const row = await this.prisma.worldMapBuildingPreset.create({
       data: {
         mapId: null,
@@ -641,20 +711,31 @@ export class WorldMapsService implements OnModuleInit {
       if (!name) throw new BadRequestException('building preset name required');
       data.name = name;
     }
-    if (body.color !== undefined) data.color = this.normalizeHexColor(body.color, '#eab308');
+    if (body.color !== undefined)
+      data.color = this.normalizeHexColor(body.color, '#eab308');
     if (body.folderId !== undefined) {
       const folderKind =
-        body?.folderKind == null ? undefined : this.normalizePresetFolderKind(body.folderKind);
-      data.folderId = await this.resolvePresetFolderId(body.folderId, folderKind);
+        body?.folderKind == null
+          ? undefined
+          : this.normalizePresetFolderKind(body.folderKind);
+      data.folderId = await this.resolvePresetFolderId(
+        body.folderId,
+        folderKind,
+      );
     }
-    if (body.tier !== undefined) data.tier = String(body.tier ?? '').trim() || null;
-    if (body.effort !== undefined) data.effort = this.toNullableIntMin(body.effort, 0);
-    if (body.space !== undefined) data.space = this.toNullableIntMin(body.space, 0);
+    if (body.tier !== undefined)
+      data.tier = String(body.tier ?? '').trim() || null;
+    if (body.effort !== undefined)
+      data.effort = this.toNullableIntMin(body.effort, 0);
+    if (body.space !== undefined)
+      data.space = this.toNullableIntMin(body.space, 0);
     if (body.description !== undefined) {
       data.description = String(body.description ?? '').trim() || null;
     }
     if (body.placementRules !== undefined) {
-      data.placementRules = this.normalizePlacementRulesInput(body.placementRules);
+      data.placementRules = this.normalizePlacementRulesInput(
+        body.placementRules,
+      );
     }
     if (body.buildCost !== undefined) {
       data.buildCost = this.normalizeResourceCostsInput(body.buildCost);
@@ -684,7 +765,9 @@ export class WorldMapsService implements OnModuleInit {
     if (!current || current.mapId !== null) {
       throw new NotFoundException('shared building preset not found');
     }
-    await this.prisma.worldMapBuildingPreset.delete({ where: { id: presetId } });
+    await this.prisma.worldMapBuildingPreset.delete({
+      where: { id: presetId },
+    });
     return { ok: true };
   }
 
@@ -766,7 +849,9 @@ export class WorldMapsService implements OnModuleInit {
       data.cityGlobal = this.normalizeCityGlobalInput(body.cityGlobal);
     }
     if (body.tileStatePresets !== undefined) {
-      data.tileStatePresets = this.normalizeTilePresetsInput(body.tileStatePresets);
+      data.tileStatePresets = this.normalizeTilePresetsInput(
+        body.tileStatePresets,
+      );
     }
     if (body.tileStateAssignments !== undefined) {
       const referencePresets =
@@ -779,13 +864,17 @@ export class WorldMapsService implements OnModuleInit {
       );
     }
     if (body.tileRegionStates !== undefined) {
-      data.tileRegionStates = this.normalizeTileRegionStatesInput(body.tileRegionStates);
+      data.tileRegionStates = this.normalizeTileRegionStatesInput(
+        body.tileRegionStates,
+      );
     }
     if (body.tileMemos !== undefined) {
       data.tileMemos = this.normalizeTileMemosInput(body.tileMemos);
     }
     if (body.buildingPresets !== undefined) {
-      data.buildingPresets = this.normalizeBuildingPresetsInput(body.buildingPresets);
+      data.buildingPresets = this.normalizeBuildingPresetsInput(
+        body.buildingPresets,
+      );
     }
 
     const updated = await this.prisma.worldMap.update({
@@ -827,7 +916,10 @@ export class WorldMapsService implements OnModuleInit {
     return { ok: true };
   }
 
-  async listBuildingPresets(user: AuthUser, mapId: string): Promise<WorldMapBuildingPresetRow[]> {
+  async listBuildingPresets(
+    user: AuthUser,
+    mapId: string,
+  ): Promise<WorldMapBuildingPresetRow[]> {
     await this.requireReadable(user, mapId);
     const rows = await this.prisma.worldMapBuildingPreset.findMany({
       where: { OR: [{ mapId }, { mapId: null }] },
@@ -845,8 +937,13 @@ export class WorldMapsService implements OnModuleInit {
     const name = String(body?.name ?? '').trim();
     if (!name) throw new BadRequestException('building preset name required');
     const folderKind =
-      body?.folderKind == null ? undefined : this.normalizePresetFolderKind(body.folderKind);
-    const folderId = await this.resolvePresetFolderId(body?.folderId, folderKind);
+      body?.folderKind == null
+        ? undefined
+        : this.normalizePresetFolderKind(body.folderKind);
+    const folderId = await this.resolvePresetFolderId(
+      body?.folderId,
+      folderKind,
+    );
     const row = await this.prisma.worldMapBuildingPreset.create({
       data: {
         mapId,
@@ -886,20 +983,31 @@ export class WorldMapsService implements OnModuleInit {
       if (!name) throw new BadRequestException('building preset name required');
       data.name = name;
     }
-    if (body.color !== undefined) data.color = this.normalizeHexColor(body.color, '#eab308');
+    if (body.color !== undefined)
+      data.color = this.normalizeHexColor(body.color, '#eab308');
     if (body.folderId !== undefined) {
       const folderKind =
-        body?.folderKind == null ? undefined : this.normalizePresetFolderKind(body.folderKind);
-      data.folderId = await this.resolvePresetFolderId(body.folderId, folderKind);
+        body?.folderKind == null
+          ? undefined
+          : this.normalizePresetFolderKind(body.folderKind);
+      data.folderId = await this.resolvePresetFolderId(
+        body.folderId,
+        folderKind,
+      );
     }
-    if (body.tier !== undefined) data.tier = String(body.tier ?? '').trim() || null;
-    if (body.effort !== undefined) data.effort = this.toNullableIntMin(body.effort, 0);
-    if (body.space !== undefined) data.space = this.toNullableIntMin(body.space, 0);
+    if (body.tier !== undefined)
+      data.tier = String(body.tier ?? '').trim() || null;
+    if (body.effort !== undefined)
+      data.effort = this.toNullableIntMin(body.effort, 0);
+    if (body.space !== undefined)
+      data.space = this.toNullableIntMin(body.space, 0);
     if (body.description !== undefined) {
       data.description = String(body.description ?? '').trim() || null;
     }
     if (body.placementRules !== undefined) {
-      data.placementRules = this.normalizePlacementRulesInput(body.placementRules);
+      data.placementRules = this.normalizePlacementRulesInput(
+        body.placementRules,
+      );
     }
     if (body.buildCost !== undefined) {
       data.buildCost = this.normalizeResourceCostsInput(body.buildCost);
@@ -929,7 +1037,9 @@ export class WorldMapsService implements OnModuleInit {
     if (!current || current.mapId !== mapId) {
       throw new NotFoundException('building preset not found');
     }
-    await this.prisma.worldMapBuildingPreset.delete({ where: { id: presetId } });
+    await this.prisma.worldMapBuildingPreset.delete({
+      where: { id: presetId },
+    });
     return { ok: true };
   }
 
@@ -949,11 +1059,24 @@ export class WorldMapsService implements OnModuleInit {
     user: AuthUser,
     mapId: string,
     body: CreateBuildingInstanceBody,
-  ): Promise<WorldMapBuildingInstanceRow & { buildSummary?: { spent: Array<{ resourceId: BuildingResourceId; label: string; amount: number }>; spaceAdded: number } }> {
+  ): Promise<
+    WorldMapBuildingInstanceRow & {
+      buildSummary?: {
+        spent: Array<{
+          resourceId: BuildingResourceId;
+          label: string;
+          amount: number;
+        }>;
+        spaceAdded: number;
+      };
+    }
+  > {
     const map = await this.requireWritable(user, mapId);
     const presetId = String(body?.presetId ?? '').trim();
     if (!presetId) throw new BadRequestException('presetId required');
-    const preset = await this.prisma.worldMapBuildingPreset.findUnique({ where: { id: presetId } });
+    const preset = await this.prisma.worldMapBuildingPreset.findUnique({
+      where: { id: presetId },
+    });
     if (!preset || (preset.mapId !== map.id && preset.mapId !== null)) {
       throw new BadRequestException('invalid presetId');
     }
@@ -973,9 +1096,15 @@ export class WorldMapsService implements OnModuleInit {
     }
 
     const cityGlobal = this.normalizeCityGlobalInput(map.cityGlobal);
-    const tileRegionStates = this.normalizeTileRegionStatesInput(map.tileRegionStates);
+    const tileRegionStates = this.normalizeTileRegionStatesInput(
+      map.tileRegionStates,
+    );
     const buildCost = normalizedPreset.buildCost ?? {};
-    const spent: Array<{ resourceId: BuildingResourceId; label: string; amount: number }> = [];
+    const spent: Array<{
+      resourceId: BuildingResourceId;
+      label: string;
+      amount: number;
+    }> = [];
     const lacking: string[] = [];
     for (const [resourceIdRaw, costRaw] of Object.entries(buildCost)) {
       const resourceId = this.normalizeBuildingResourceId(resourceIdRaw);
@@ -984,13 +1113,13 @@ export class WorldMapsService implements OnModuleInit {
       if (cost <= 0) continue;
       const current = this.getBuildingResourceAmount(cityGlobal, resourceId);
       if (current < cost) {
-        lacking.push(`${this.getBuildingResourceLabel(resourceId)}(${current}/${cost})`);
+        lacking.push(
+          `${this.getBuildingResourceLabel(resourceId)}(${current}/${cost})`,
+        );
       }
     }
     if (lacking.length > 0) {
-      throw new BadRequestException(
-        `건설 비용 부족: ${lacking.join(', ')}`,
-      );
+      throw new BadRequestException(`건설 비용 부족: ${lacking.join(', ')}`);
     }
     for (const [resourceIdRaw, costRaw] of Object.entries(buildCost)) {
       const resourceId = this.normalizeBuildingResourceId(resourceIdRaw);
@@ -998,14 +1127,25 @@ export class WorldMapsService implements OnModuleInit {
       const cost = Math.max(0, Math.trunc(Number(costRaw) || 0));
       if (cost <= 0) continue;
       const current = this.getBuildingResourceAmount(cityGlobal, resourceId);
-      this.setBuildingResourceAmount(cityGlobal, resourceId, Math.max(0, current - cost));
-      spent.push({ resourceId, label: this.getBuildingResourceLabel(resourceId), amount: cost });
+      this.setBuildingResourceAmount(
+        cityGlobal,
+        resourceId,
+        Math.max(0, current - cost),
+      );
+      spent.push({
+        resourceId,
+        label: this.getBuildingResourceLabel(resourceId),
+        amount: cost,
+      });
     }
 
-    const presetSpace = Math.max(0, Math.trunc(Number(normalizedPreset.space ?? 0)));
+    const presetSpace = Math.max(
+      0,
+      Math.trunc(Number(normalizedPreset.space ?? 0)),
+    );
     if (presetSpace > 0) {
       const key = this.tileKey(col, tileRow);
-      const current = (tileRegionStates[key] ?? {}) as MapTileRegionState;
+      const current = tileRegionStates[key] ?? {};
       const spaceUsed = Math.max(0, Math.trunc(Number(current.spaceUsed ?? 0)));
       const spaceCap = Math.max(0, Math.trunc(Number(current.spaceCap ?? 0)));
       if (spaceCap > 0 && spaceUsed + presetSpace > spaceCap) {
@@ -1019,23 +1159,47 @@ export class WorldMapsService implements OnModuleInit {
       };
     }
 
-    const requestedProgress = this.toInt(body?.progressEffort ?? 0, 'progressEffort', 0, 1_000_000);
-    const requiredEffort = Math.max(0, Math.trunc(Number(normalizedPreset.effort ?? 0)));
-    const willActivateImmediately = requiredEffort <= 0 || requestedProgress >= requiredEffort;
-    const assignedWorkersByType = this.extractAssignedWorkersByTypeFromMeta(body?.meta);
-    const assignedWorkers = this.sumAssignedWorkersByType(assignedWorkersByType);
+    const requestedProgress = this.toInt(
+      body?.progressEffort ?? 0,
+      'progressEffort',
+      0,
+      1_000_000,
+    );
+    const requiredEffort = Math.max(
+      0,
+      Math.trunc(Number(normalizedPreset.effort ?? 0)),
+    );
+    const willActivateImmediately =
+      requiredEffort <= 0 || requestedProgress >= requiredEffort;
+    const assignedWorkersByType = this.extractAssignedWorkersByTypeFromMeta(
+      body?.meta,
+    );
+    const assignedWorkers = this.sumAssignedWorkersByType(
+      assignedWorkersByType,
+    );
     const shouldReserveWorkers =
-      (body?.enabled !== undefined ? !!body.enabled : true) && !willActivateImmediately;
+      (body?.enabled !== undefined ? !!body.enabled : true) &&
+      !willActivateImmediately;
     if (shouldReserveWorkers && assignedWorkers > 0) {
-      if (!this.canReserveWorkersByType(cityGlobal.population, assignedWorkersByType)) {
+      if (
+        !this.canReserveWorkersByType(
+          cityGlobal.population,
+          assignedWorkersByType,
+        )
+      ) {
         const lacks = TRACKED_WORKER_POPULATION_IDS.map((id) => {
           const req = Math.max(0, assignedWorkersByType[id] ?? 0);
           if (req <= 0) return null;
-          const cur = Math.max(0, Math.trunc(Number(cityGlobal.population[id]?.available ?? 0) || 0));
+          const cur = Math.max(
+            0,
+            Math.trunc(Number(cityGlobal.population[id]?.available ?? 0) || 0),
+          );
           if (cur >= req) return null;
           return `${POPULATION_LABELS[id]}(${cur}/${req})`;
         }).filter(Boolean) as string[];
-        throw new BadRequestException(`건설 투입 인원 부족: ${lacks.join(', ')}`);
+        throw new BadRequestException(
+          `건설 투입 인원 부족: ${lacks.join(', ')}`,
+        );
       }
       this.reserveWorkersByType(cityGlobal.population, assignedWorkersByType);
     }
@@ -1092,26 +1256,43 @@ export class WorldMapsService implements OnModuleInit {
     const preset = await this.prisma.worldMapBuildingPreset.findUnique({
       where: { id: current.presetId },
     });
-    const normalizedPreset = preset ? this.toBuildingPresetRow(preset) : undefined;
-    const requiredEffort = Math.max(0, Math.trunc(Number(normalizedPreset?.effort ?? 0)));
+    const normalizedPreset = preset
+      ? this.toBuildingPresetRow(preset)
+      : undefined;
+    const requiredEffort = Math.max(
+      0,
+      Math.trunc(Number(normalizedPreset?.effort ?? 0)),
+    );
     const readCurrentStatus = this.readBuildStatusFromMeta(current.meta);
     const currentStatus: BuildRuntimeStatus =
       requiredEffort <= 0
         ? 'active'
-        : readCurrentStatus ?? (current.progressEffort >= requiredEffort ? 'active' : 'building');
+        : (readCurrentStatus ??
+          (current.progressEffort >= requiredEffort ? 'active' : 'building'));
 
-    const nextEnabled = body.enabled !== undefined ? !!body.enabled : current.enabled;
+    const nextEnabled =
+      body.enabled !== undefined ? !!body.enabled : current.enabled;
     const nextProgress =
       body.progressEffort !== undefined
         ? this.toInt(body.progressEffort, 'progressEffort', 0, 1_000_000)
         : current.progressEffort;
     const inputMeta =
-      body.meta !== undefined ? this.toPlainRecord(body.meta) : this.toPlainRecord(current.meta);
-    const nextWorkersByType = this.extractAssignedWorkersByTypeFromMeta(inputMeta);
+      body.meta !== undefined
+        ? this.toPlainRecord(body.meta)
+        : this.toPlainRecord(current.meta);
+    const nextWorkersByType =
+      this.extractAssignedWorkersByTypeFromMeta(inputMeta);
     const nextWorkers = this.sumAssignedWorkersByType(nextWorkersByType);
     const nextStatus: BuildRuntimeStatus =
-      requiredEffort <= 0 || nextProgress >= requiredEffort ? 'active' : 'building';
-    const nextMeta = this.withBuildMeta(inputMeta, nextStatus, nextWorkers, nextWorkersByType);
+      requiredEffort <= 0 || nextProgress >= requiredEffort
+        ? 'active'
+        : 'building';
+    const nextMeta = this.withBuildMeta(
+      inputMeta,
+      nextStatus,
+      nextWorkers,
+      nextWorkersByType,
+    );
 
     const emptyWorkers: Record<PopulationTrackedId, number> = {
       settlers: 0,
@@ -1119,11 +1300,17 @@ export class WorldMapsService implements OnModuleInit {
       scholars: 0,
       laborers: 0,
     };
-    const currentWorkersByType = this.extractAssignedWorkersByTypeFromMeta(current.meta);
+    const currentWorkersByType = this.extractAssignedWorkersByTypeFromMeta(
+      current.meta,
+    );
     const reservedBefore =
-      current.enabled && currentStatus === 'building' ? currentWorkersByType : emptyWorkers;
+      current.enabled && currentStatus === 'building'
+        ? currentWorkersByType
+        : emptyWorkers;
     const reservedAfter =
-      nextEnabled && nextStatus === 'building' ? nextWorkersByType : emptyWorkers;
+      nextEnabled && nextStatus === 'building'
+        ? nextWorkersByType
+        : emptyWorkers;
 
     const cityGlobal = this.normalizeCityGlobalInput(map.cityGlobal);
     this.releaseWorkersByType(cityGlobal.population, reservedBefore);
@@ -1131,7 +1318,10 @@ export class WorldMapsService implements OnModuleInit {
       const lacks = TRACKED_WORKER_POPULATION_IDS.map((id) => {
         const req = Math.max(0, reservedAfter[id] ?? 0);
         if (req <= 0) return null;
-        const cur = Math.max(0, Math.trunc(Number(cityGlobal.population[id]?.available ?? 0) || 0));
+        const cur = Math.max(
+          0,
+          Math.trunc(Number(cityGlobal.population[id]?.available ?? 0) || 0),
+        );
         if (cur >= req) return null;
         return `${POPULATION_LABELS[id]}(${cur}/${req})`;
       }).filter(Boolean) as string[];
@@ -1166,7 +1356,11 @@ export class WorldMapsService implements OnModuleInit {
     return this.toBuildingInstanceRow(row);
   }
 
-  async deleteBuildingInstance(user: AuthUser, mapId: string, instanceId: string) {
+  async deleteBuildingInstance(
+    user: AuthUser,
+    mapId: string,
+    instanceId: string,
+  ) {
     await this.requireWritable(user, mapId);
     const current = await this.prisma.worldMapBuildingInstance.findUnique({
       where: { id: instanceId },
@@ -1185,70 +1379,108 @@ export class WorldMapsService implements OnModuleInit {
       throw new NotFoundException('building instance not found');
     }
     await this.applyBuildingEventEffects(mapId, 'onRemove', [instanceId]);
-    await this.prisma.worldMapBuildingInstance.delete({ where: { id: instanceId } });
+    await this.prisma.worldMapBuildingInstance.delete({
+      where: { id: instanceId },
+    });
     let removedSpace = 0;
     const map = await this.prisma.worldMap.findUnique({ where: { id: mapId } });
     if (map) {
       const preset = await this.prisma.worldMapBuildingPreset.findUnique({
         where: { id: current.presetId },
       });
-      const normalizedPreset = preset ? this.toBuildingPresetRow(preset) : undefined;
-      const presetSpace = Math.max(0, Math.trunc(Number(normalizedPreset?.space ?? 0)));
+      const normalizedPreset = preset
+        ? this.toBuildingPresetRow(preset)
+        : undefined;
+      const presetSpace = Math.max(
+        0,
+        Math.trunc(Number(normalizedPreset?.space ?? 0)),
+      );
       removedSpace = presetSpace;
-      const requiredEffort = Math.max(0, Math.trunc(Number(normalizedPreset?.effort ?? 0)));
+      const requiredEffort = Math.max(
+        0,
+        Math.trunc(Number(normalizedPreset?.effort ?? 0)),
+      );
       const statusFromMeta = this.readBuildStatusFromMeta(current.meta);
       const status: BuildRuntimeStatus =
         requiredEffort <= 0
           ? 'active'
-          : statusFromMeta ?? (current.progressEffort >= requiredEffort ? 'active' : 'building');
+          : (statusFromMeta ??
+            (current.progressEffort >= requiredEffort ? 'active' : 'building'));
       // 미완공(건설중) 건물 제거 시에는 건설 비용을 환불한다.
       // 완공 건물은 기본적으로 환불하지 않으며, 별도 onRemove 규칙으로만 자원 변화가 난다.
       if (status === 'building' && normalizedPreset?.buildCost) {
         const cityGlobal = this.normalizeCityGlobalInput(map.cityGlobal);
-        for (const [resourceIdRaw, costRaw] of Object.entries(normalizedPreset.buildCost)) {
+        for (const [resourceIdRaw, costRaw] of Object.entries(
+          normalizedPreset.buildCost,
+        )) {
           const resourceId = this.normalizeBuildingResourceId(resourceIdRaw);
           if (!resourceId) continue;
           const cost = Math.max(0, Math.trunc(Number(costRaw) || 0));
           if (cost <= 0) continue;
-          const currentValue = this.getBuildingResourceAmount(cityGlobal, resourceId);
+          const currentValue = this.getBuildingResourceAmount(
+            cityGlobal,
+            resourceId,
+          );
           let nextValue = currentValue + cost;
-          if (this.isBaseResourceId(resourceId) && CAPPED_RESOURCE_SET.has(resourceId)) {
+          if (
+            this.isBaseResourceId(resourceId) &&
+            CAPPED_RESOURCE_SET.has(resourceId)
+          ) {
             const cap = Math.max(
               0,
-              Math.trunc(Number(cityGlobal.caps[resourceId as keyof typeof cityGlobal.caps] ?? 0) || 0),
+              Math.trunc(
+                Number(
+                  cityGlobal.caps[resourceId as keyof typeof cityGlobal.caps] ??
+                    0,
+                ) || 0,
+              ),
             );
             nextValue = Math.min(cap, nextValue);
           }
-          this.setBuildingResourceAmount(cityGlobal, resourceId, Math.max(0, Math.trunc(nextValue)));
+          this.setBuildingResourceAmount(
+            cityGlobal,
+            resourceId,
+            Math.max(0, Math.trunc(nextValue)),
+          );
         }
         map.cityGlobal = cityGlobal as unknown as Prisma.JsonValue;
       }
       if (current.enabled && status === 'building') {
-        const workersByType = this.extractAssignedWorkersByTypeFromMeta(current.meta);
+        const workersByType = this.extractAssignedWorkersByTypeFromMeta(
+          current.meta,
+        );
         const cityGlobal = this.normalizeCityGlobalInput(map.cityGlobal);
         this.releaseWorkersByType(cityGlobal.population, workersByType);
         map.cityGlobal = cityGlobal as unknown as Prisma.JsonValue;
       }
       if (presetSpace > 0) {
         const key = this.tileKey(current.col, current.row);
-        const tileRegionStates = this.normalizeTileRegionStatesInput(map.tileRegionStates);
+        const tileRegionStates = this.normalizeTileRegionStatesInput(
+          map.tileRegionStates,
+        );
         const prev = tileRegionStates[key] ?? {};
         const prevUsed = Math.max(0, Math.trunc(Number(prev.spaceUsed ?? 0)));
-        tileRegionStates[key] = { ...prev, spaceUsed: Math.max(0, prevUsed - presetSpace) };
+        tileRegionStates[key] = {
+          ...prev,
+          spaceUsed: Math.max(0, prevUsed - presetSpace),
+        };
         await this.prisma.worldMap.update({
           where: { id: mapId },
           data: {
-            cityGlobal:
-              (this.normalizeCityGlobalInput(map.cityGlobal) as unknown as Prisma.InputJsonValue),
-            tileRegionStates: tileRegionStates as unknown as Prisma.InputJsonValue,
+            cityGlobal: this.normalizeCityGlobalInput(
+              map.cityGlobal,
+            ) as unknown as Prisma.InputJsonValue,
+            tileRegionStates:
+              tileRegionStates as unknown as Prisma.InputJsonValue,
           },
         });
       } else {
         await this.prisma.worldMap.update({
           where: { id: mapId },
           data: {
-            cityGlobal:
-              (this.normalizeCityGlobalInput(map.cityGlobal) as unknown as Prisma.InputJsonValue),
+            cityGlobal: this.normalizeCityGlobalInput(
+              map.cityGlobal,
+            ) as unknown as Prisma.InputJsonValue,
           },
         });
       }
@@ -1256,9 +1488,16 @@ export class WorldMapsService implements OnModuleInit {
     return { ok: true, removedSpace };
   }
 
-  async listTickLogs(user: AuthUser, mapId: string, limit = 30): Promise<WorldMapTickLogRow[]> {
+  async listTickLogs(
+    user: AuthUser,
+    mapId: string,
+    limit = 30,
+  ): Promise<WorldMapTickLogRow[]> {
     await this.requireReadable(user, mapId);
-    const safeLimit = Math.max(1, Math.min(200, Math.trunc(Number(limit) || 30)));
+    const safeLimit = Math.max(
+      1,
+      Math.min(200, Math.trunc(Number(limit) || 30)),
+    );
     const rows = await this.prisma.worldMapTickLog.findMany({
       where: { mapId },
       orderBy: { createdAt: 'desc' },
@@ -1277,7 +1516,8 @@ export class WorldMapsService implements OnModuleInit {
       data: {
         mapId,
         day: this.toInt(body?.day ?? 0, 'day', 0, 1_000_000),
-        summary: (this.toPlainRecord(body?.summary) ?? {}) as Prisma.InputJsonValue,
+        summary: (this.toPlainRecord(body?.summary) ??
+          {}) as Prisma.InputJsonValue,
       },
     });
     return this.toTickLogRow(row);
@@ -1305,7 +1545,12 @@ export class WorldMapsService implements OnModuleInit {
       >,
     };
     for (let i = 0; i < days; i += 1) {
-      const iter = await this.applyBuildingEventEffects(mapId, 'daily', undefined, true);
+      const iter = await this.applyBuildingEventEffects(
+        mapId,
+        'daily',
+        undefined,
+        true,
+      );
       summary = {
         days: summary.days + 1,
         appliedRules: summary.appliedRules + iter.appliedRules,
@@ -1333,20 +1578,34 @@ export class WorldMapsService implements OnModuleInit {
             ? (iter.overflowBeforeGold ?? null)
             : summary.overflowBeforeGold,
         overflowAfterGold:
-          iter.overflowAfterGold != null ? iter.overflowAfterGold : summary.overflowAfterGold,
+          iter.overflowAfterGold != null
+            ? iter.overflowAfterGold
+            : summary.overflowAfterGold,
         overflowDetails: (() => {
           const next = { ...(summary.overflowDetails ?? {}) } as Partial<
-            Record<CappedResourceId, { overflowAmount: number; goldGain: number }>
+            Record<
+              CappedResourceId,
+              { overflowAmount: number; goldGain: number }
+            >
           >;
-          const iterDetails = Array.isArray(iter.overflowDetails) ? iter.overflowDetails : [];
+          const iterDetails = Array.isArray(iter.overflowDetails)
+            ? iter.overflowDetails
+            : [];
           for (const detail of iterDetails) {
-            const resourceId = detail?.resourceId as CappedResourceId;
-            if (!resourceId || !CAPPED_RESOURCE_SET.has(resourceId as ResourceId)) continue;
+            const resourceId = detail?.resourceId;
+            if (
+              !resourceId ||
+              !CAPPED_RESOURCE_SET.has(resourceId as ResourceId)
+            )
+              continue;
             const overflowAmount = Math.max(
               0,
               Math.trunc(Number(detail?.overflowAmount ?? 0) || 0),
             );
-            const goldGain = Math.max(0, Math.trunc(Number(detail?.goldGain ?? 0) || 0));
+            const goldGain = Math.max(
+              0,
+              Math.trunc(Number(detail?.goldGain ?? 0) || 0),
+            );
             if (overflowAmount <= 0 || goldGain <= 0) continue;
             const prev = next[resourceId] ?? { overflowAmount: 0, goldGain: 0 };
             next[resourceId] = {
@@ -1380,11 +1639,16 @@ export class WorldMapsService implements OnModuleInit {
         } as unknown as Prisma.InputJsonValue,
       },
     });
-    const overflowDetails = (Object.entries(summary.overflowDetails) as Array<
-      [CappedResourceId, { overflowAmount: number; goldGain: number }]
-    >).map(([resourceId, v]) => ({
+    const overflowDetails = (
+      Object.entries(summary.overflowDetails) as Array<
+        [CappedResourceId, { overflowAmount: number; goldGain: number }]
+      >
+    ).map(([resourceId, v]) => ({
       resourceId,
-      overflowAmount: Math.max(0, Math.trunc(Number(v?.overflowAmount ?? 0) || 0)),
+      overflowAmount: Math.max(
+        0,
+        Math.trunc(Number(v?.overflowAmount ?? 0) || 0),
+      ),
       goldGain: Math.max(0, Math.trunc(Number(v?.goldGain ?? 0) || 0)),
     }));
     return { ok: true, ...summary, overflowDetails };
@@ -1396,7 +1660,9 @@ export class WorldMapsService implements OnModuleInit {
     targetInstanceIds?: string[],
     advanceDay = false,
   ) {
-    const mapRow = await this.prisma.worldMap.findUnique({ where: { id: mapId } });
+    const mapRow = await this.prisma.worldMap.findUnique({
+      where: { id: mapId },
+    });
     if (!mapRow) throw new NotFoundException('world map not found');
 
     const presetRows = await this.prisma.worldMapBuildingPreset.findMany({
@@ -1423,8 +1689,12 @@ export class WorldMapsService implements OnModuleInit {
       mapRow.tileStateAssignments,
       this.normalizeTilePresetsInput(mapRow.tileStatePresets),
     );
-    let tileRegions = this.normalizeTileRegionStatesInput(mapRow.tileRegionStates);
-    const troopsDeployedByTile = this.parseTroopsDeployedByTileFromTileMemos(mapRow.tileMemos);
+    let tileRegions = this.normalizeTileRegionStatesInput(
+      mapRow.tileRegionStates,
+    );
+    const troopsDeployedByTile = this.parseTroopsDeployedByTileFromTileMemos(
+      mapRow.tileMemos,
+    );
 
     const targetSet = new Set(targetInstanceIds ?? []);
 
@@ -1437,7 +1707,10 @@ export class WorldMapsService implements OnModuleInit {
       if (!effects) return;
       if (!origin.preset) return;
       if (eventKind === 'daily' && !options?.skipDailyUpkeep) {
-        const upkeepCheck = this.tryConsumeDailyUpkeep(origin.preset, cityGlobal);
+        const upkeepCheck = this.tryConsumeDailyUpkeep(
+          origin.preset,
+          cityGlobal,
+        );
         if (!upkeepCheck.ok) {
           failedRules += 1;
           logs.push({
@@ -1454,18 +1727,22 @@ export class WorldMapsService implements OnModuleInit {
       }
       const rules =
         eventKind === 'onBuild'
-          ? effects.onBuild ?? []
+          ? (effects.onBuild ?? [])
           : eventKind === 'onRemove'
-            ? effects.onRemove ?? []
+            ? (effects.onRemove ?? [])
             : eventKind === 'sustain'
-              ? effects.sustain ?? []
-              : effects.daily ?? [];
+              ? (effects.sustain ?? [])
+              : (effects.daily ?? []);
       if (!Array.isArray(rules) || rules.length === 0) return;
 
       for (const rule of rules) {
-        if (!rule || !Array.isArray(rule.actions) || rule.actions.length === 0) continue;
+        if (!rule || !Array.isArray(rule.actions) || rule.actions.length === 0)
+          continue;
         if (eventKind === 'daily') {
-          const interval = Math.max(1, Math.trunc(Number(rule.intervalDays ?? 1) || 1));
+          const interval = Math.max(
+            1,
+            Math.trunc(Number(rule.intervalDays ?? 1) || 1),
+          );
           if (cityGlobal.day % interval !== 0) {
             logs.push({
               instanceId: origin.id,
@@ -1507,7 +1784,10 @@ export class WorldMapsService implements OnModuleInit {
           });
           continue;
         }
-        const repeatCount = Math.max(1, Math.trunc(Number(pred.repeatCount || 1)));
+        const repeatCount = Math.max(
+          1,
+          Math.trunc(Number(pred.repeatCount || 1)),
+        );
         appliedRules += 1;
         let ruleAppliedActions = 0;
         for (let repeatIdx = 0; repeatIdx < repeatCount; repeatIdx += 1) {
@@ -1536,11 +1816,18 @@ export class WorldMapsService implements OnModuleInit {
     };
 
     const determineStatus = (entry: RuntimeInstance): BuildRuntimeStatus => {
-      const requiredEffort = Math.max(0, Math.trunc(Number(entry.preset?.effort ?? 0)));
+      const requiredEffort = Math.max(
+        0,
+        Math.trunc(Number(entry.preset?.effort ?? 0)),
+      );
       if (requiredEffort <= 0) return 'active';
       const metaStatus = this.readBuildStatusFromMeta(entry.meta);
-      if (metaStatus === 'active' || metaStatus === 'building') return metaStatus;
-      const progress = Math.max(0, Math.trunc(Number(entry.progressEffort ?? 0)));
+      if (metaStatus === 'active' || metaStatus === 'building')
+        return metaStatus;
+      const progress = Math.max(
+        0,
+        Math.trunc(Number(entry.progressEffort ?? 0)),
+      );
       return progress >= requiredEffort ? 'active' : 'building';
     };
 
@@ -1561,7 +1848,8 @@ export class WorldMapsService implements OnModuleInit {
       beforeGold: null,
       afterGold: null,
     };
-    const orientation: HexOrientation = mapRow.orientation === 'flat' ? 'flat' : 'pointy';
+    const orientation: HexOrientation =
+      mapRow.orientation === 'flat' ? 'flat' : 'pointy';
     const instancePatchById = new Map<
       string,
       {
@@ -1580,7 +1868,10 @@ export class WorldMapsService implements OnModuleInit {
     if (event === 'daily') {
       for (const origin of instances.filter((entry) => entry.enabled)) {
         if (!origin.preset) continue;
-        const requiredEffort = Math.max(0, Math.trunc(Number(origin.preset.effort ?? 0)));
+        const requiredEffort = Math.max(
+          0,
+          Math.trunc(Number(origin.preset.effort ?? 0)),
+        );
         if (requiredEffort <= 0) {
           const workersByType = computeAssignedWorkersByType(origin);
           const nextMeta = this.withBuildMeta(
@@ -1632,7 +1923,10 @@ export class WorldMapsService implements OnModuleInit {
           });
           continue;
         }
-        const prevProgress = Math.max(0, Math.trunc(Number(origin.progressEffort ?? 0)));
+        const prevProgress = Math.max(
+          0,
+          Math.trunc(Number(origin.progressEffort ?? 0)),
+        );
         const nextProgress = Math.min(requiredEffort, prevProgress + workers);
         const reached = nextProgress >= requiredEffort;
         const nextMeta = this.withBuildMeta(
@@ -1683,7 +1977,9 @@ export class WorldMapsService implements OnModuleInit {
     }
 
     if (event === 'daily' && activateNow.size > 0) {
-      for (const origin of instances.filter((entry) => activateNow.has(entry.id))) {
+      for (const origin of instances.filter((entry) =>
+        activateNow.has(entry.id),
+      )) {
         runRulesForOrigin(origin, 'onBuild', { skipDailyUpkeep: true });
       }
     }
@@ -1698,9 +1994,11 @@ export class WorldMapsService implements OnModuleInit {
     if (instancePatchById.size > 0) {
       for (const [instanceId, patch] of instancePatchById.entries()) {
         const data: Prisma.WorldMapBuildingInstanceUpdateInput = {};
-        if (patch.progressEffort !== undefined) data.progressEffort = patch.progressEffort;
+        if (patch.progressEffort !== undefined)
+          data.progressEffort = patch.progressEffort;
         if (patch.meta !== undefined) {
-          data.meta = (this.toPlainRecord(patch.meta) ?? {}) as Prisma.InputJsonValue;
+          data.meta = (this.toPlainRecord(patch.meta) ??
+            {}) as Prisma.InputJsonValue;
         }
         if (Object.keys(data).length === 0) continue;
         await this.prisma.worldMapBuildingInstance.update({
@@ -1715,14 +2013,17 @@ export class WorldMapsService implements OnModuleInit {
       tileStates,
       this.normalizeTilePresetsInput(mapRow.tileStatePresets),
     );
-    const normalizedTileRegions = this.normalizeTileRegionStatesInput(tileRegions);
+    const normalizedTileRegions =
+      this.normalizeTileRegionStatesInput(tileRegions);
 
     await this.prisma.worldMap.update({
       where: { id: mapId },
       data: {
         cityGlobal: normalizedCityGlobal as unknown as Prisma.InputJsonValue,
-        tileStateAssignments: normalizedTileStates as unknown as Prisma.InputJsonValue,
-        tileRegionStates: normalizedTileRegions as unknown as Prisma.InputJsonValue,
+        tileStateAssignments:
+          normalizedTileStates as unknown as Prisma.InputJsonValue,
+        tileRegionStates:
+          normalizedTileRegions as unknown as Prisma.InputJsonValue,
       },
     });
 
@@ -1748,12 +2049,17 @@ export class WorldMapsService implements OnModuleInit {
         Math.trunc(Number(foodConsumption.goldSpent ?? 0) || 0),
       ),
       logs,
-      overflowConvertedGold: Math.max(0, Math.trunc(Number(overflowTracker.convertedGold || 0))),
+      overflowConvertedGold: Math.max(
+        0,
+        Math.trunc(Number(overflowTracker.convertedGold || 0)),
+      ),
       overflowBeforeGold: overflowTracker.beforeGold,
       overflowAfterGold: overflowTracker.afterGold,
-      overflowDetails: (Object.entries(overflowTracker.details) as Array<
-        [CappedResourceId, { overflowAmount: number; goldGain: number }]
-      >)
+      overflowDetails: (
+        Object.entries(overflowTracker.details) as Array<
+          [CappedResourceId, { overflowAmount: number; goldGain: number }]
+        >
+      )
         .filter(
           ([, v]) =>
             Math.max(0, Math.trunc(Number(v?.overflowAmount ?? 0) || 0)) > 0 &&
@@ -1761,7 +2067,10 @@ export class WorldMapsService implements OnModuleInit {
         )
         .map(([resourceId, v]) => ({
           resourceId,
-          overflowAmount: Math.max(0, Math.trunc(Number(v.overflowAmount ?? 0) || 0)),
+          overflowAmount: Math.max(
+            0,
+            Math.trunc(Number(v.overflowAmount ?? 0) || 0),
+          ),
           goldGain: Math.max(0, Math.trunc(Number(v.goldGain ?? 0) || 0)),
         })),
     };
@@ -1773,7 +2082,9 @@ export class WorldMapsService implements OnModuleInit {
     col: number,
     row: number,
   ) {
-    const placementRules = Array.isArray(preset.placementRules) ? preset.placementRules : [];
+    const placementRules = Array.isArray(preset.placementRules)
+      ? preset.placementRules
+      : [];
     if (placementRules.length === 0) return [] as string[];
     const presetRows = await this.prisma.worldMapBuildingPreset.findMany({
       where: { OR: [{ mapId: mapRow.id }, { mapId: null }] },
@@ -1859,7 +2170,10 @@ export class WorldMapsService implements OnModuleInit {
     return '배치 조건 실패';
   }
 
-  private evaluateRulePredicate(predicate: BuildingRulePredicate, ctx: RuntimeContext): boolean {
+  private evaluateRulePredicate(
+    predicate: BuildingRulePredicate,
+    ctx: RuntimeContext,
+  ): boolean {
     return this.evaluateRulePredicateDetailed(predicate, ctx).matched;
   }
 
@@ -1867,7 +2181,8 @@ export class WorldMapsService implements OnModuleInit {
     predicate: BuildingRulePredicate,
     ctx: RuntimeContext,
   ): PredicateEvalResult {
-    if (!predicate || typeof predicate !== 'object') return { matched: true, repeatCount: 1 };
+    if (!predicate || typeof predicate !== 'object')
+      return { matched: true, repeatCount: 1 };
     if (predicate.kind === 'compare') {
       const left = this.evalRuleExpr(predicate.left, ctx);
       const right = this.evalRuleExpr(predicate.right, ctx);
@@ -1878,15 +2193,19 @@ export class WorldMapsService implements OnModuleInit {
       };
     }
     if (predicate.kind === 'tileRegionCompare') {
-      const state = this.getTileRegionState(ctx, ctx.origin.col, ctx.origin.row);
+      const state = this.getTileRegionState(
+        ctx,
+        ctx.origin.col,
+        ctx.origin.row,
+      );
       const left =
         predicate.field === 'spaceRemaining'
           ? Math.max(0, (state.spaceCap ?? 0) - (state.spaceUsed ?? 0))
           : predicate.field === 'pollution'
-            ? state.pollution ?? 0
+            ? (state.pollution ?? 0)
             : predicate.field === 'threat'
-              ? state.threat ?? 0
-              : state.satisfaction ?? 0;
+              ? (state.threat ?? 0)
+              : (state.satisfaction ?? 0);
       return {
         matched: this.compareByOp(left, predicate.value, predicate.op),
         repeatCount: 1,
@@ -1895,26 +2214,46 @@ export class WorldMapsService implements OnModuleInit {
     }
     if (predicate.kind === 'hasTag') {
       const count =
-        this.countTagsInRange(ctx, predicate.tagId, predicate.scope === 'adjacent' ? 1 : 0) ?? 0;
-      return { matched: count > 0, repeatCount: 1, reason: `속성 존재(${predicate.tagId})` };
+        this.countTagsInRange(
+          ctx,
+          predicate.tagId,
+          predicate.scope === 'adjacent' ? 1 : 0,
+        ) ?? 0;
+      return {
+        matched: count > 0,
+        repeatCount: 1,
+        reason: `속성 존재(${predicate.tagId})`,
+      };
     }
     if (predicate.kind === 'hasBuilding') {
       const count =
-        this.countBuildingsInRange(ctx, predicate.presetId, predicate.scope === 'adjacent' ? 1 : 0) ??
-        0;
-      return { matched: count > 0, repeatCount: 1, reason: `건물 존재(${predicate.presetId})` };
+        this.countBuildingsInRange(
+          ctx,
+          predicate.presetId,
+          predicate.scope === 'adjacent' ? 1 : 0,
+        ) ?? 0;
+      return {
+        matched: count > 0,
+        repeatCount: 1,
+        reason: `건물 존재(${predicate.presetId})`,
+      };
     }
     if (predicate.kind === 'logic') {
       const rules = Array.isArray(predicate.rules) ? predicate.rules : [];
       if (rules.length === 0) return { matched: true, repeatCount: 1 };
-      const children = rules.map((entry) => this.evaluateRulePredicateDetailed(entry, ctx));
+      const children = rules.map((entry) =>
+        this.evaluateRulePredicateDetailed(entry, ctx),
+      );
       if (predicate.op === 'or') {
         const matchedChildren = children.filter((entry) => entry.matched);
         return {
           matched: matchedChildren.length > 0,
           repeatCount:
             matchedChildren.length > 0
-              ? Math.max(1, ...matchedChildren.map((entry) => entry.repeatCount || 1))
+              ? Math.max(
+                  1,
+                  ...matchedChildren.map((entry) => entry.repeatCount || 1),
+                )
               : 1,
           reason: '논리 OR',
         };
@@ -1930,9 +2269,15 @@ export class WorldMapsService implements OnModuleInit {
       };
     }
     if (predicate.kind === 'uniquePerTile') {
-      const maxCount = Math.max(1, Math.trunc(Number(predicate.maxCount ?? 1) || 1));
+      const maxCount = Math.max(
+        1,
+        Math.trunc(Number(predicate.maxCount ?? 1) || 1),
+      );
       const sameTile = ctx.instances.filter(
-        (entry) => entry.enabled && entry.col === ctx.origin.col && entry.row === ctx.origin.row,
+        (entry) =>
+          entry.enabled &&
+          entry.col === ctx.origin.col &&
+          entry.row === ctx.origin.row,
       );
       return {
         matched: sameTile.length <= maxCount,
@@ -1941,8 +2286,14 @@ export class WorldMapsService implements OnModuleInit {
       };
     }
     if (predicate.kind === 'requireTagInRange') {
-      const distance = Math.max(0, Math.trunc(Number(predicate.distance ?? 1) || 0));
-      const minCount = Math.max(1, Math.trunc(Number(predicate.minCount ?? 1) || 1));
+      const distance = Math.max(
+        0,
+        Math.trunc(Number(predicate.distance ?? 1) || 0),
+      );
+      const minCount = Math.max(
+        1,
+        Math.trunc(Number(predicate.minCount ?? 1) || 1),
+      );
       const count = this.countTagsInRange(
         ctx,
         predicate.tagPresetId,
@@ -1965,9 +2316,19 @@ export class WorldMapsService implements OnModuleInit {
       };
     }
     if (predicate.kind === 'requireBuildingInRange') {
-      const distance = Math.max(0, Math.trunc(Number(predicate.distance ?? 1) || 0));
-      const minCount = Math.max(1, Math.trunc(Number(predicate.minCount ?? 1) || 1));
-      const count = this.countBuildingsInRange(ctx, predicate.presetId, distance);
+      const distance = Math.max(
+        0,
+        Math.trunc(Number(predicate.distance ?? 1) || 0),
+      );
+      const minCount = Math.max(
+        1,
+        Math.trunc(Number(predicate.minCount ?? 1) || 1),
+      );
+      const count = this.countBuildingsInRange(
+        ctx,
+        predicate.presetId,
+        distance,
+      );
       const totalTiles = this.getTargetTileCountByDistance(ctx, distance);
       const matchedRaw = count >= minCount;
       const matched = predicate.negate ? !matchedRaw : matchedRaw;
@@ -1983,8 +2344,14 @@ export class WorldMapsService implements OnModuleInit {
       };
     }
     if (predicate.kind === 'requireTroopInRange') {
-      const distance = Math.max(0, Math.trunc(Number(predicate.distance ?? 1) || 0));
-      const minCount = Math.max(1, Math.trunc(Number(predicate.minCount ?? 1) || 1));
+      const distance = Math.max(
+        0,
+        Math.trunc(Number(predicate.distance ?? 1) || 0),
+      );
+      const minCount = Math.max(
+        1,
+        Math.trunc(Number(predicate.minCount ?? 1) || 1),
+      );
       const troop = this.countTroopsInRange(ctx, predicate.presetId, distance);
       const totalTiles = this.getTargetTileCountByDistance(ctx, distance);
       const matchedRaw = troop.units >= minCount;
@@ -2001,18 +2368,30 @@ export class WorldMapsService implements OnModuleInit {
       };
     }
     if (predicate.kind === 'custom') {
-      return { matched: true, repeatCount: 1, reason: `사용자 조건(${predicate.label})` };
+      return {
+        matched: true,
+        repeatCount: 1,
+        reason: `사용자 조건(${predicate.label})`,
+      };
     }
     return { matched: true, repeatCount: 1 };
   }
 
-  private applyRuleAction(action: BuildingRuleAction, ctx: RuntimeContext): boolean {
+  private applyRuleAction(
+    action: BuildingRuleAction,
+    ctx: RuntimeContext,
+  ): boolean {
     if (!action || typeof action !== 'object') return false;
     if (action.kind === 'adjustResource') {
-      const resourceId = this.normalizeBuildingResourceId((action as any).resourceId);
+      const resourceId = this.normalizeBuildingResourceId(
+        (action as any).resourceId,
+      );
       if (!resourceId) return false;
       const delta = Math.trunc(this.evalRuleExpr(action.delta, ctx));
-      const current = this.getBuildingResourceAmount(ctx.cityGlobal, resourceId);
+      const current = this.getBuildingResourceAmount(
+        ctx.cityGlobal,
+        resourceId,
+      );
       let next = current + delta;
       if (next < 0) next = 0;
       const shouldDeferOverflow =
@@ -2030,7 +2409,9 @@ export class WorldMapsService implements OnModuleInit {
           next = cap;
           const rate = Math.max(
             0,
-            Math.trunc(Number(ctx.cityGlobal.overflowToGold?.[resourceId] ?? 0) || 0),
+            Math.trunc(
+              Number(ctx.cityGlobal.overflowToGold?.[resourceId] ?? 0) || 0,
+            ),
           );
           if (overflow > 0 && rate > 0) {
             const currentGold = Math.max(
@@ -2045,7 +2426,10 @@ export class WorldMapsService implements OnModuleInit {
               if (tracker.beforeGold == null) tracker.beforeGold = currentGold;
               tracker.afterGold = nextGold;
               tracker.convertedGold += goldGain;
-              const prev = tracker.details[resourceId] ?? { overflowAmount: 0, goldGain: 0 };
+              const prev = tracker.details[resourceId] ?? {
+                overflowAmount: 0,
+                goldGain: 0,
+              };
               tracker.details[resourceId] = {
                 overflowAmount: prev.overflowAmount + overflow,
                 goldGain: prev.goldGain + goldGain,
@@ -2068,9 +2452,15 @@ export class WorldMapsService implements OnModuleInit {
     }
     if (action.kind === 'adjustPopulation') {
       const delta = Math.trunc(this.evalRuleExpr(action.delta, ctx));
-      const entry = ctx.cityGlobal.population[action.populationId] ?? { total: 0, available: 0 };
+      const entry = ctx.cityGlobal.population[action.populationId] ?? {
+        total: 0,
+        available: 0,
+      };
       if (action.field === 'available') {
-        const next = Math.max(0, Math.min(entry.total ?? 0, (entry.available ?? 0) + delta));
+        const next = Math.max(
+          0,
+          Math.min(entry.total ?? 0, (entry.available ?? 0) + delta),
+        );
         entry.available = next;
         ctx.cityGlobal.population[action.populationId] = entry;
         return delta !== 0;
@@ -2078,8 +2468,13 @@ export class WorldMapsService implements OnModuleInit {
       const currentTotal = Math.max(0, entry.total ?? 0);
       let nextTotal = Math.max(0, currentTotal + delta);
       if (delta > 0) {
-        const totalPopulation = this.getTotalPopulation(ctx.cityGlobal.population);
-        const room = Math.max(0, ctx.cityGlobal.populationCap - totalPopulation);
+        const totalPopulation = this.getTotalPopulation(
+          ctx.cityGlobal.population,
+        );
+        const room = Math.max(
+          0,
+          ctx.cityGlobal.populationCap - totalPopulation,
+        );
         nextTotal = currentTotal + Math.min(delta, room);
       }
       entry.total = nextTotal;
@@ -2090,17 +2485,32 @@ export class WorldMapsService implements OnModuleInit {
     if (action.kind === 'adjustPopulationCap') {
       const delta = Math.trunc(this.evalRuleExpr(action.delta, ctx));
       const current = Math.max(0, ctx.cityGlobal.populationCap ?? 0);
-      const totalPopulation = this.getTotalPopulation(ctx.cityGlobal.population);
+      const totalPopulation = this.getTotalPopulation(
+        ctx.cityGlobal.population,
+      );
       const next = Math.max(totalPopulation, current + delta);
       ctx.cityGlobal.populationCap = next;
       return delta !== 0;
     }
     if (action.kind === 'convertPopulation') {
-      const amount = Math.max(0, Math.trunc(this.evalRuleExpr(action.amount, ctx)));
+      const amount = Math.max(
+        0,
+        Math.trunc(this.evalRuleExpr(action.amount, ctx)),
+      );
       if (amount <= 0) return false;
-      const from = ctx.cityGlobal.population[action.from] ?? { total: 0, available: 0 };
-      const to = ctx.cityGlobal.population[action.to] ?? { total: 0, available: 0 };
-      const movable = Math.min(amount, Math.max(0, from.available ?? 0), Math.max(0, from.total ?? 0));
+      const from = ctx.cityGlobal.population[action.from] ?? {
+        total: 0,
+        available: 0,
+      };
+      const to = ctx.cityGlobal.population[action.to] ?? {
+        total: 0,
+        available: 0,
+      };
+      const movable = Math.min(
+        amount,
+        Math.max(0, from.available ?? 0),
+        Math.max(0, from.total ?? 0),
+      );
       if (movable <= 0) return false;
       from.total = Math.max(0, (from.total ?? 0) - movable);
       from.available = Math.max(0, (from.available ?? 0) - movable);
@@ -2126,8 +2536,7 @@ export class WorldMapsService implements OnModuleInit {
         const field = action.field;
         const base = Math.trunc(Number(current[field] ?? 0) || 0);
         const rawNext = Math.trunc(base + delta);
-        const next =
-          field === 'threat' ? rawNext : Math.max(0, rawNext);
+        const next = field === 'threat' ? rawNext : Math.max(0, rawNext);
         current[field] = next;
         ctx.tileRegions[key] = current;
         changed = changed || delta !== 0;
@@ -2143,8 +2552,12 @@ export class WorldMapsService implements OnModuleInit {
       );
       let changed = false;
       for (const key of targets) {
-        const current = Array.isArray(ctx.tileStates[key]) ? [...ctx.tileStates[key]] : [];
-        const idx = current.findIndex((entry) => entry.presetId === action.tagPresetId);
+        const current = Array.isArray(ctx.tileStates[key])
+          ? [...ctx.tileStates[key]]
+          : [];
+        const idx = current.findIndex(
+          (entry) => entry.presetId === action.tagPresetId,
+        );
         if (idx >= 0) {
           const nextValue = String(action.value ?? '').trim();
           if (nextValue && current[idx].value !== nextValue) {
@@ -2156,7 +2569,9 @@ export class WorldMapsService implements OnModuleInit {
         }
         current.push({
           presetId: action.tagPresetId,
-          ...(String(action.value ?? '').trim() ? { value: String(action.value ?? '').trim() } : {}),
+          ...(String(action.value ?? '').trim()
+            ? { value: String(action.value ?? '').trim() }
+            : {}),
         });
         ctx.tileStates[key] = current;
         changed = true;
@@ -2172,8 +2587,12 @@ export class WorldMapsService implements OnModuleInit {
       );
       let changed = false;
       for (const key of targets) {
-        const current = Array.isArray(ctx.tileStates[key]) ? [...ctx.tileStates[key]] : [];
-        const next = current.filter((entry) => entry.presetId !== action.tagPresetId);
+        const current = Array.isArray(ctx.tileStates[key])
+          ? [...ctx.tileStates[key]]
+          : [];
+        const next = current.filter(
+          (entry) => entry.presetId !== action.tagPresetId,
+        );
         if (next.length !== current.length) {
           if (next.length > 0) ctx.tileStates[key] = next;
           else delete ctx.tileStates[key];
@@ -2189,12 +2608,13 @@ export class WorldMapsService implements OnModuleInit {
     if (!expr || typeof expr !== 'object') return 0;
     if (expr.kind === 'const') return Number(expr.value) || 0;
     if (expr.kind === 'resource') {
-      const resourceId = this.normalizeBuildingResourceId((expr as any).resourceId);
+      const resourceId = this.normalizeBuildingResourceId(expr.resourceId);
       if (!resourceId) return 0;
       return this.getBuildingResourceAmount(ctx.cityGlobal, resourceId);
     }
     if (expr.kind === 'population') {
-      const entry = ctx.cityGlobal.population?.[expr.populationId as PopulationId];
+      const entry =
+        ctx.cityGlobal.population?.[expr.populationId as PopulationId];
       if (!entry) return 0;
       if (expr.field === 'available') return Number(entry.available ?? 0) || 0;
       return Number(entry.total ?? 0) || 0;
@@ -2208,7 +2628,9 @@ export class WorldMapsService implements OnModuleInit {
       }
       if (expr.metric === 'tileStateValue') {
         const key = this.tileKey(ctx.origin.col, ctx.origin.row);
-        const target = (ctx.tileStates[key] ?? []).find((entry) => entry.presetId === String(expr.key ?? ''));
+        const target = (ctx.tileStates[key] ?? []).find(
+          (entry) => entry.presetId === String(expr.key ?? ''),
+        );
         const n = Number(target?.value ?? 0);
         return Number.isFinite(n) ? n : 0;
       }
@@ -2236,8 +2658,12 @@ export class WorldMapsService implements OnModuleInit {
     }
     if (expr.kind === 'clamp') {
       const v = this.evalRuleExpr(expr.value, ctx);
-      const min = Number.isFinite(Number(expr.min)) ? Number(expr.min) : -Infinity;
-      const max = Number.isFinite(Number(expr.max)) ? Number(expr.max) : Infinity;
+      const min = Number.isFinite(Number(expr.min))
+        ? Number(expr.min)
+        : -Infinity;
+      const max = Number.isFinite(Number(expr.max))
+        ? Number(expr.max)
+        : Infinity;
       return Math.max(min, Math.min(max, v));
     }
     if (expr.kind === 'randPct') {
@@ -2277,7 +2703,10 @@ export class WorldMapsService implements OnModuleInit {
   }
 
   private applyPopulationFoodConsumption(cityGlobal: CityGlobalState) {
-    const requiredFood = Math.max(0, this.getTotalPopulation(cityGlobal.population));
+    const requiredFood = Math.max(
+      0,
+      this.getTotalPopulation(cityGlobal.population),
+    );
     if (requiredFood <= 0) {
       return {
         requiredFood: 0,
@@ -2286,16 +2715,25 @@ export class WorldMapsService implements OnModuleInit {
         goldSpent: 0,
       };
     }
-    const currentFood = Math.max(0, Math.trunc(Number(cityGlobal.values.food ?? 0) || 0));
+    const currentFood = Math.max(
+      0,
+      Math.trunc(Number(cityGlobal.values.food ?? 0) || 0),
+    );
     const consumedFood = Math.min(currentFood, requiredFood);
     const deficitFood = Math.max(0, requiredFood - consumedFood);
     cityGlobal.values.food = Math.max(0, currentFood - consumedFood);
 
     let goldSpent = 0;
     if (deficitFood > 0) {
-      const rate = Math.max(0, Math.trunc(Number(cityGlobal.foodDeficitGoldRate ?? 0) || 0));
+      const rate = Math.max(
+        0,
+        Math.trunc(Number(cityGlobal.foodDeficitGoldRate ?? 0) || 0),
+      );
       if (rate > 0) {
-        const currentGold = Math.max(0, Math.trunc(Number(cityGlobal.values.gold ?? 0) || 0));
+        const currentGold = Math.max(
+          0,
+          Math.trunc(Number(cityGlobal.values.gold ?? 0) || 0),
+        );
         const needGold = Math.max(0, deficitFood * rate);
         goldSpent = Math.min(currentGold, needGold);
         cityGlobal.values.gold = Math.max(0, currentGold - goldSpent);
@@ -2314,8 +2752,14 @@ export class WorldMapsService implements OnModuleInit {
     tracker?: OverflowConversionTracker,
   ) {
     for (const resourceId of CAPPED_RESOURCE_IDS) {
-      const current = Math.max(0, Math.trunc(Number(cityGlobal.values[resourceId] ?? 0) || 0));
-      const cap = Math.max(0, Math.trunc(Number(cityGlobal.caps[resourceId] ?? 0) || 0));
+      const current = Math.max(
+        0,
+        Math.trunc(Number(cityGlobal.values[resourceId] ?? 0) || 0),
+      );
+      const cap = Math.max(
+        0,
+        Math.trunc(Number(cityGlobal.caps[resourceId] ?? 0) || 0),
+      );
       if (current <= cap) {
         cityGlobal.values[resourceId] = current;
         continue;
@@ -2323,10 +2767,16 @@ export class WorldMapsService implements OnModuleInit {
       const overflow = Math.max(0, current - cap);
       cityGlobal.values[resourceId] = cap;
 
-      const rate = Math.max(0, Math.trunc(Number(cityGlobal.overflowToGold?.[resourceId] ?? 0) || 0));
+      const rate = Math.max(
+        0,
+        Math.trunc(Number(cityGlobal.overflowToGold?.[resourceId] ?? 0) || 0),
+      );
       if (overflow <= 0 || rate <= 0) continue;
 
-      const currentGold = Math.max(0, Math.trunc(Number(cityGlobal.values.gold ?? 0) || 0));
+      const currentGold = Math.max(
+        0,
+        Math.trunc(Number(cityGlobal.values.gold ?? 0) || 0),
+      );
       const goldGain = overflow * rate;
       const nextGold = currentGold + goldGain;
       cityGlobal.values.gold = nextGold;
@@ -2335,7 +2785,10 @@ export class WorldMapsService implements OnModuleInit {
         if (tracker.beforeGold == null) tracker.beforeGold = currentGold;
         tracker.afterGold = nextGold;
         tracker.convertedGold += goldGain;
-        const prev = tracker.details[resourceId] ?? { overflowAmount: 0, goldGain: 0 };
+        const prev = tracker.details[resourceId] ?? {
+          overflowAmount: 0,
+          goldGain: 0,
+        };
         tracker.details[resourceId] = {
           overflowAmount: prev.overflowAmount + overflow,
           goldGain: prev.goldGain + goldGain,
@@ -2350,9 +2803,9 @@ export class WorldMapsService implements OnModuleInit {
     const base = this.toPlainRecord(meta) ?? {};
     const build = this.toPlainRecord(base.buildMeta) ?? {};
     const byTypeRaw =
-      (this.toPlainRecord(build.assignedWorkersByType) ??
-        this.toPlainRecord(base.assignedWorkersByType) ??
-        {}) as Record<string, unknown>;
+      this.toPlainRecord(build.assignedWorkersByType) ??
+      this.toPlainRecord(base.assignedWorkersByType) ??
+      {};
 
     const out: Record<PopulationTrackedId, number> = {
       settlers: 0,
@@ -2366,13 +2819,20 @@ export class WorldMapsService implements OnModuleInit {
     }
     const total = this.sumAssignedWorkersByType(out);
     if (total <= 0) {
-      const legacy = Math.max(0, Math.trunc(Number(build.assignedWorkers ?? base.assignedWorkers ?? 0) || 0));
+      const legacy = Math.max(
+        0,
+        Math.trunc(
+          Number(build.assignedWorkers ?? base.assignedWorkers ?? 0) || 0,
+        ),
+      );
       if (legacy > 0) out.laborers = legacy;
     }
     return out;
   }
 
-  private sumAssignedWorkersByType(byType: Record<PopulationTrackedId, number>) {
+  private sumAssignedWorkersByType(
+    byType: Record<PopulationTrackedId, number>,
+  ) {
     return TRACKED_WORKER_POPULATION_IDS.reduce(
       (sum, id) => sum + Math.max(0, Math.trunc(Number(byType[id] ?? 0) || 0)),
       0,
@@ -2380,7 +2840,9 @@ export class WorldMapsService implements OnModuleInit {
   }
 
   private extractAssignedWorkersFromMeta(meta: unknown) {
-    return this.sumAssignedWorkersByType(this.extractAssignedWorkersByTypeFromMeta(meta));
+    return this.sumAssignedWorkersByType(
+      this.extractAssignedWorkersByTypeFromMeta(meta),
+    );
   }
 
   private readBuildStatusFromMeta(meta: unknown): BuildRuntimeStatus | null {
@@ -2434,7 +2896,10 @@ export class WorldMapsService implements OnModuleInit {
     workersByType: Record<PopulationTrackedId, number>,
   ) {
     for (const id of TRACKED_WORKER_POPULATION_IDS) {
-      const required = Math.max(0, Math.trunc(Number(workersByType[id] ?? 0) || 0));
+      const required = Math.max(
+        0,
+        Math.trunc(Number(workersByType[id] ?? 0) || 0),
+      );
       if (required <= 0) continue;
       const available = Math.max(
         0,
@@ -2450,10 +2915,16 @@ export class WorldMapsService implements OnModuleInit {
     workersByType: Record<PopulationTrackedId, number>,
   ) {
     for (const id of TRACKED_WORKER_POPULATION_IDS) {
-      const required = Math.max(0, Math.trunc(Number(workersByType[id] ?? 0) || 0));
+      const required = Math.max(
+        0,
+        Math.trunc(Number(workersByType[id] ?? 0) || 0),
+      );
       if (required <= 0) continue;
       const entry = population[id] ?? { total: 0, available: 0 };
-      const available = Math.max(0, Math.trunc(Number(entry.available ?? 0) || 0));
+      const available = Math.max(
+        0,
+        Math.trunc(Number(entry.available ?? 0) || 0),
+      );
       entry.available = Math.max(0, available - required);
       population[id] = entry;
     }
@@ -2464,17 +2935,26 @@ export class WorldMapsService implements OnModuleInit {
     workersByType: Record<PopulationTrackedId, number>,
   ) {
     for (const id of TRACKED_WORKER_POPULATION_IDS) {
-      const releasing = Math.max(0, Math.trunc(Number(workersByType[id] ?? 0) || 0));
+      const releasing = Math.max(
+        0,
+        Math.trunc(Number(workersByType[id] ?? 0) || 0),
+      );
       if (releasing <= 0) continue;
       const entry = population[id] ?? { total: 0, available: 0 };
       const total = Math.max(0, Math.trunc(Number(entry.total ?? 0) || 0));
-      const available = Math.max(0, Math.trunc(Number(entry.available ?? 0) || 0));
+      const available = Math.max(
+        0,
+        Math.trunc(Number(entry.available ?? 0) || 0),
+      );
       entry.available = Math.min(total, available + releasing);
       population[id] = entry;
     }
   }
 
-  private tryConsumeDailyUpkeep(preset: WorldMapBuildingPresetRow, cityGlobal: CityGlobalState) {
+  private tryConsumeDailyUpkeep(
+    preset: WorldMapBuildingPresetRow,
+    cityGlobal: CityGlobalState,
+  ) {
     const upkeep = preset.upkeep ?? {};
     const resourceCosts = upkeep.resources ?? {};
     const populationCosts = upkeep.population ?? {};
@@ -2487,7 +2967,9 @@ export class WorldMapsService implements OnModuleInit {
       if (cost <= 0) continue;
       const current = this.getBuildingResourceAmount(cityGlobal, resourceId);
       if (current < cost) {
-        reasons.push(`${this.getBuildingResourceLabel(resourceId)} 부족(${current}/${cost})`);
+        reasons.push(
+          `${this.getBuildingResourceLabel(resourceId)} 부족(${current}/${cost})`,
+        );
       }
     }
 
@@ -2498,7 +2980,9 @@ export class WorldMapsService implements OnModuleInit {
       if (populationId === 'anyNonElderly') {
         const current = this.getAvailableNonElderly(cityGlobal.population);
         if (current < cost) {
-          reasons.push(`${POPULATION_LABELS[populationId]} 부족(${current}/${cost})`);
+          reasons.push(
+            `${POPULATION_LABELS[populationId]} 부족(${current}/${cost})`,
+          );
         }
         continue;
       }
@@ -2506,18 +2990,29 @@ export class WorldMapsService implements OnModuleInit {
         const current = Math.max(
           0,
           Math.trunc(
-            Number(cityGlobal.population.elderly?.available ?? cityGlobal.population.elderly?.total ?? 0),
+            Number(
+              cityGlobal.population.elderly?.available ??
+                cityGlobal.population.elderly?.total ??
+                0,
+            ),
           ),
         );
         if (current < cost) {
-          reasons.push(`${POPULATION_LABELS[populationId]} 부족(${current}/${cost})`);
+          reasons.push(
+            `${POPULATION_LABELS[populationId]} 부족(${current}/${cost})`,
+          );
         }
         continue;
       }
-      const entry = cityGlobal.population[populationId] ?? { total: 0, available: 0 };
+      const entry = cityGlobal.population[populationId] ?? {
+        total: 0,
+        available: 0,
+      };
       const current = Math.max(0, Math.trunc(Number(entry.available ?? 0)));
       if (current < cost) {
-        reasons.push(`${POPULATION_LABELS[populationId]} 부족(${current}/${cost})`);
+        reasons.push(
+          `${POPULATION_LABELS[populationId]} 부족(${current}/${cost})`,
+        );
       }
     }
 
@@ -2529,15 +3024,23 @@ export class WorldMapsService implements OnModuleInit {
       const cost = Math.max(0, Math.trunc(Number(rawCost) || 0));
       if (cost <= 0) continue;
       const current = this.getBuildingResourceAmount(cityGlobal, resourceId);
-      this.setBuildingResourceAmount(cityGlobal, resourceId, Math.max(0, current - cost));
+      this.setBuildingResourceAmount(
+        cityGlobal,
+        resourceId,
+        Math.max(0, current - cost),
+      );
     }
     // 유지 인구는 "소모"가 아니라 "요구 충족" 개념이므로 일일 실행 시 인구를 차감하지 않는다.
     return { ok: true as const, reasons: [] as string[] };
   }
 
-  private getTileRegionState(ctx: RuntimeContext, col: number, row: number): MapTileRegionState {
+  private getTileRegionState(
+    ctx: RuntimeContext,
+    col: number,
+    row: number,
+  ): MapTileRegionState {
     const key = this.tileKey(col, row);
-    const state = (ctx.tileRegions[key] ?? {}) as MapTileRegionState;
+    const state = ctx.tileRegions[key] ?? {};
     return {
       spaceUsed: Math.max(0, Math.trunc(Number(state.spaceUsed ?? 0))),
       spaceCap: Math.max(0, Math.trunc(Number(state.spaceCap ?? 0))),
@@ -2556,7 +3059,10 @@ export class WorldMapsService implements OnModuleInit {
     value?: string,
   ) {
     if (!tagPresetId) return 0;
-    const targets = this.resolveTargetTilesByDistance(ctx, Math.max(0, distance));
+    const targets = this.resolveTargetTilesByDistance(
+      ctx,
+      Math.max(0, distance),
+    );
     const expect = String(value ?? '').trim();
     let count = 0;
     for (const key of targets) {
@@ -2573,19 +3079,32 @@ export class WorldMapsService implements OnModuleInit {
     return count;
   }
 
-  private countBuildingsInRange(ctx: RuntimeContext, presetId: string, distance: number) {
+  private countBuildingsInRange(
+    ctx: RuntimeContext,
+    presetId: string,
+    distance: number,
+  ) {
     if (!presetId) return 0;
     const maxDistance = Math.max(0, distance);
     return ctx.instances.filter((entry) => {
       if (!entry.enabled || entry.presetId !== presetId) return false;
       return (
-        this.hexDistance(ctx.origin.col, ctx.origin.row, entry.col, entry.row, ctx.orientation) <=
-        maxDistance
+        this.hexDistance(
+          ctx.origin.col,
+          ctx.origin.row,
+          entry.col,
+          entry.row,
+          ctx.orientation,
+        ) <= maxDistance
       );
     }).length;
   }
 
-  private countTroopsInRange(ctx: RuntimeContext, presetId: string, distance: number) {
+  private countTroopsInRange(
+    ctx: RuntimeContext,
+    presetId: string,
+    distance: number,
+  ) {
     if (!presetId) return { units: 0, tiles: 0 };
     const deployedByTile = ctx.troopsDeployedByTile ?? {};
     const maxDistance = Math.max(0, distance);
@@ -2594,7 +3113,15 @@ export class WorldMapsService implements OnModuleInit {
     for (const [key, byPresetRaw] of Object.entries(deployedByTile)) {
       const [col, row] = this.parseTileKey(key);
       if (col == null || row == null) continue;
-      if (this.hexDistance(ctx.origin.col, ctx.origin.row, col, row, ctx.orientation) > maxDistance)
+      if (
+        this.hexDistance(
+          ctx.origin.col,
+          ctx.origin.row,
+          col,
+          row,
+          ctx.orientation,
+        ) > maxDistance
+      )
         continue;
       const byPreset = this.toPlainRecord(byPresetRaw) ?? {};
       const qty = Math.max(0, Math.trunc(Number(byPreset[presetId] ?? 0) || 0));
@@ -2627,15 +3154,23 @@ export class WorldMapsService implements OnModuleInit {
     return [this.tileKey(ctx.origin.col, ctx.origin.row)];
   }
 
-  private resolveTargetTilesByDistance(ctx: RuntimeContext, maxDistance: number) {
+  private resolveTargetTilesByDistance(
+    ctx: RuntimeContext,
+    maxDistance: number,
+  ) {
     const out = new Set<string>();
     const cols = Math.max(1, Math.trunc(Number(ctx.cols) || 1));
     const rows = Math.max(1, Math.trunc(Number(ctx.rows) || 1));
     for (let row = 0; row < rows; row += 1) {
       for (let col = 0; col < cols; col += 1) {
         if (
-          this.hexDistance(ctx.origin.col, ctx.origin.row, col, row, ctx.orientation) <=
-          maxDistance
+          this.hexDistance(
+            ctx.origin.col,
+            ctx.origin.row,
+            col,
+            row,
+            ctx.orientation,
+          ) <= maxDistance
         ) {
           out.add(this.tileKey(col, row));
         }
@@ -2656,7 +3191,11 @@ export class WorldMapsService implements OnModuleInit {
     return [col, row];
   }
 
-  private toAxial(col: number, row: number, orientation: HexOrientation): [number, number] {
+  private toAxial(
+    col: number,
+    row: number,
+    orientation: HexOrientation,
+  ): [number, number] {
     // Keep this mapping aligned with frontend hexDistanceByOrientation:
     // - pointy => odd-r offset
     // - flat   => odd-q offset
@@ -2689,7 +3228,9 @@ export class WorldMapsService implements OnModuleInit {
     if (this.imageStorageDriver !== 'r2') return null;
     const endpoint = String(process.env.R2_ENDPOINT ?? '').trim();
     const accessKeyId = String(process.env.R2_ACCESS_KEY_ID ?? '').trim();
-    const secretAccessKey = String(process.env.R2_SECRET_ACCESS_KEY ?? '').trim();
+    const secretAccessKey = String(
+      process.env.R2_SECRET_ACCESS_KEY ?? '',
+    ).trim();
     if (!endpoint || !accessKeyId || !secretAccessKey) {
       this.logger.warn(
         '[world-maps] WORLD_MAP_IMAGE_STORAGE=r2 이지만 R2_ENDPOINT/R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY 중 일부가 비어 있어 local 저장소로 동작합니다.',
@@ -2820,7 +3361,7 @@ export class WorldMapsService implements OnModuleInit {
 
     for (const item of parsed) {
       try {
-        const ownerId = String((item as any)?.ownerId ?? '').trim();
+        const ownerId = String(item?.ownerId ?? '').trim();
         if (!ownerId || !userIds.has(ownerId)) {
           skipped += 1;
           continue;
@@ -2840,7 +3381,9 @@ export class WorldMapsService implements OnModuleInit {
         created += 1;
       } catch (e: any) {
         failed += 1;
-        this.logger.warn(`legacy world map 마이그레이션 실패: ${String(e?.message ?? e)}`);
+        this.logger.warn(
+          `legacy world map 마이그레이션 실패: ${String(e?.message ?? e)}`,
+        );
       }
     }
 
@@ -2895,7 +3438,9 @@ export class WorldMapsService implements OnModuleInit {
         row.tileStateAssignments,
         this.normalizeTilePresetsInput(row.tileStatePresets),
       ),
-      tileRegionStates: this.normalizeTileRegionStatesInput(row.tileRegionStates),
+      tileRegionStates: this.normalizeTileRegionStatesInput(
+        row.tileRegionStates,
+      ),
       tileMemos: this.normalizeTileMemosInput(row.tileMemos),
       buildingPresets: this.normalizeBuildingPresetsInput(row.buildingPresets),
       createdAt:
@@ -2920,9 +3465,11 @@ export class WorldMapsService implements OnModuleInit {
       effort: this.toNullableIntMin(row.effort, 0) ?? undefined,
       space: this.toNullableIntMin(row.space, 0) ?? undefined,
       description: String(row.description ?? '').trim() || undefined,
-      placementRules: this.normalizePlacementRulesInput(row.placementRules) ?? undefined,
+      placementRules:
+        this.normalizePlacementRulesInput(row.placementRules) ?? undefined,
       buildCost: this.normalizeResourceCostsInput(row.buildCost) ?? undefined,
-      researchCost: this.normalizeResourceCostsInput(row.researchCost) ?? undefined,
+      researchCost:
+        this.normalizeResourceCostsInput(row.researchCost) ?? undefined,
       upkeep: this.normalizeUpkeepInput(row.upkeep) ?? undefined,
       effects: this.normalizeEffectsInput(row.effects) ?? undefined,
       createdAt:
@@ -2944,7 +3491,12 @@ export class WorldMapsService implements OnModuleInit {
       col: this.toInt(row.col, 'col', -1000000, 1000000),
       row: this.toInt(row.row, 'row', -1000000, 1000000),
       enabled: !!row.enabled,
-      progressEffort: this.toInt(row.progressEffort ?? 0, 'progressEffort', 0, 1_000_000),
+      progressEffort: this.toInt(
+        row.progressEffort ?? 0,
+        'progressEffort',
+        0,
+        1_000_000,
+      ),
       meta: this.toPlainRecord(row.meta),
       createdAt:
         row.createdAt instanceof Date
@@ -2984,21 +3536,24 @@ export class WorldMapsService implements OnModuleInit {
   }
 
   private toNullableIntMin(value: unknown, min = 0): number | null {
-    if (value === null || value === undefined || String(value).trim() === '') return null;
+    if (value === null || value === undefined || String(value).trim() === '')
+      return null;
     const n = Math.trunc(Number(value));
     if (!Number.isFinite(n)) return null;
     return Math.max(min, n);
   }
 
   private toNullableInt(value: unknown): number | null {
-    if (value === null || value === undefined || String(value).trim() === '') return null;
+    if (value === null || value === undefined || String(value).trim() === '')
+      return null;
     const n = Math.trunc(Number(value));
     if (!Number.isFinite(n)) return null;
     return n;
   }
 
   private toPlainRecord(value: unknown): Record<string, unknown> | undefined {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+      return undefined;
     return value as Record<string, unknown>;
   }
 
@@ -3006,7 +3561,9 @@ export class WorldMapsService implements OnModuleInit {
     return RESOURCE_IDS.includes(value as ResourceId);
   }
 
-  private normalizeBuildingResourceId(value: unknown): BuildingResourceId | undefined {
+  private normalizeBuildingResourceId(
+    value: unknown,
+  ): BuildingResourceId | undefined {
     const raw = String(value ?? '').trim();
     if (!raw) return undefined;
     if (this.isBaseResourceId(raw)) return raw;
@@ -3023,7 +3580,11 @@ export class WorldMapsService implements OnModuleInit {
     return Math.max(0, Math.trunc(Number(warehouse[itemName] ?? 0) || 0));
   }
 
-  private setWarehouseAmount(cityGlobal: CityGlobalState, itemName: string, amount: number) {
+  private setWarehouseAmount(
+    cityGlobal: CityGlobalState,
+    itemName: string,
+    amount: number,
+  ) {
     const warehouse = cityGlobal.warehouse ?? {};
     const next = Math.max(0, Math.trunc(Number(amount) || 0));
     if (next <= 0) {
@@ -3036,9 +3597,15 @@ export class WorldMapsService implements OnModuleInit {
     cityGlobal.warehouse = warehouse;
   }
 
-  private getBuildingResourceAmount(cityGlobal: CityGlobalState, resourceId: BuildingResourceId) {
+  private getBuildingResourceAmount(
+    cityGlobal: CityGlobalState,
+    resourceId: BuildingResourceId,
+  ) {
     if (this.isBaseResourceId(resourceId)) {
-      return Math.max(0, Math.trunc(Number(cityGlobal.values[resourceId] ?? 0) || 0));
+      return Math.max(
+        0,
+        Math.trunc(Number(cityGlobal.values[resourceId] ?? 0) || 0),
+      );
     }
     const itemName = resourceId.slice(5).trim();
     if (!itemName) return 0;
@@ -3061,8 +3628,11 @@ export class WorldMapsService implements OnModuleInit {
   }
 
   private getBuildingResourceLabel(resourceId: BuildingResourceId) {
-    if (this.isBaseResourceId(resourceId)) return RESOURCE_LABELS[resourceId] ?? resourceId;
-    return resourceId.startsWith('item:') ? resourceId.slice(5).trim() || resourceId : resourceId;
+    if (this.isBaseResourceId(resourceId))
+      return RESOURCE_LABELS[resourceId] ?? resourceId;
+    return resourceId.startsWith('item:')
+      ? resourceId.slice(5).trim() || resourceId
+      : resourceId;
   }
 
   private normalizeResourceCostsInput(
@@ -3093,20 +3663,22 @@ export class WorldMapsService implements OnModuleInit {
     return Object.keys(out).length > 0 ? out : undefined;
   }
 
-  private normalizePlacementRulesInput(input: unknown): BuildingPlacementRule[] | undefined {
+  private normalizePlacementRulesInput(
+    input: unknown,
+  ): BuildingPlacementRule[] | undefined {
     if (!Array.isArray(input)) return undefined;
     const out: BuildingPlacementRule[] = [];
     for (const entry of input) {
       if (!entry || typeof entry !== 'object') continue;
-      const kind = String((entry as any).kind ?? '').trim();
+      const kind = String(entry.kind ?? '').trim();
       if (!kind) continue;
       if (kind === 'uniquePerTile') {
-        const maxCount = this.toNullableIntMin((entry as any).maxCount, 1) ?? 1;
+        const maxCount = this.toNullableIntMin(entry.maxCount, 1) ?? 1;
         out.push({ kind: 'uniquePerTile', maxCount });
         continue;
       }
       if (kind === 'tileRegionCompare') {
-        const fieldRaw = String((entry as any).field ?? '').trim();
+        const fieldRaw = String(entry.field ?? '').trim();
         const field =
           fieldRaw === 'spaceRemaining' ||
           fieldRaw === 'pollution' ||
@@ -3114,7 +3686,7 @@ export class WorldMapsService implements OnModuleInit {
           fieldRaw === 'satisfaction'
             ? fieldRaw
             : 'spaceRemaining';
-        const opRaw = String((entry as any).op ?? '').trim();
+        const opRaw = String(entry.op ?? '').trim();
         const op =
           opRaw === 'eq' ||
           opRaw === 'ne' ||
@@ -3124,28 +3696,28 @@ export class WorldMapsService implements OnModuleInit {
           opRaw === 'lte'
             ? opRaw
             : 'gte';
-        const value = this.toNullableInt((entry as any).value) ?? 0;
+        const value = this.toNullableInt(entry.value) ?? 0;
         out.push({ kind: 'tileRegionCompare', field, op, value });
         continue;
       }
       if (kind === 'requireTagInRange') {
-        const tagPresetId = String((entry as any).tagPresetId ?? '').trim();
+        const tagPresetId = String(entry.tagPresetId ?? '').trim();
         if (!tagPresetId) continue;
         const hasDistance = Object.prototype.hasOwnProperty.call(
           entry as Record<string, unknown>,
           'distance',
         );
-        const parsedDistance = this.toNullableIntMin((entry as any).distance, 0);
+        const parsedDistance = this.toNullableIntMin(entry.distance, 0);
         const distance = parsedDistance ?? (hasDistance ? 0 : 1);
-        const minCount = this.toNullableIntMin((entry as any).minCount, 0) ?? undefined;
-        const negate = !!(entry as any).negate;
-        const repeat = !!(entry as any).repeat;
-        const valueModeRaw = String((entry as any).valueMode ?? '').trim();
+        const minCount = this.toNullableIntMin(entry.minCount, 0) ?? undefined;
+        const negate = !!entry.negate;
+        const repeat = !!entry.repeat;
+        const valueModeRaw = String(entry.valueMode ?? '').trim();
         const valueMode =
           valueModeRaw === 'equals' || valueModeRaw === 'contains'
-            ? (valueModeRaw as 'equals' | 'contains')
+            ? valueModeRaw
             : undefined;
-        const value = String((entry as any).value ?? '').trim() || undefined;
+        const value = String(entry.value ?? '').trim() || undefined;
         out.push({
           kind: 'requireTagInRange',
           tagPresetId,
@@ -3159,52 +3731,76 @@ export class WorldMapsService implements OnModuleInit {
         continue;
       }
       if (kind === 'requireBuildingInRange') {
-        const presetId = String((entry as any).presetId ?? '').trim();
+        const presetId = String(entry.presetId ?? '').trim();
         if (!presetId) continue;
         const hasDistance = Object.prototype.hasOwnProperty.call(
           entry as Record<string, unknown>,
           'distance',
         );
-        const parsedDistance = this.toNullableIntMin((entry as any).distance, 0);
+        const parsedDistance = this.toNullableIntMin(entry.distance, 0);
         const distance = parsedDistance ?? (hasDistance ? 0 : 1);
-        const minCount = this.toNullableIntMin((entry as any).minCount, 0) ?? undefined;
-        const negate = !!(entry as any).negate;
-        const repeat = !!(entry as any).repeat;
-        out.push({ kind: 'requireBuildingInRange', presetId, distance, minCount, negate, repeat });
+        const minCount = this.toNullableIntMin(entry.minCount, 0) ?? undefined;
+        const negate = !!entry.negate;
+        const repeat = !!entry.repeat;
+        out.push({
+          kind: 'requireBuildingInRange',
+          presetId,
+          distance,
+          minCount,
+          negate,
+          repeat,
+        });
         continue;
       }
       if (kind === 'requireTroopInRange') {
-        const presetId = String((entry as any).presetId ?? '').trim();
+        const presetId = String(entry.presetId ?? '').trim();
         if (!presetId) continue;
         const hasDistance = Object.prototype.hasOwnProperty.call(
           entry as Record<string, unknown>,
           'distance',
         );
-        const parsedDistance = this.toNullableIntMin((entry as any).distance, 0);
+        const parsedDistance = this.toNullableIntMin(entry.distance, 0);
         const distance = parsedDistance ?? (hasDistance ? 0 : 1);
-        const minCount = this.toNullableIntMin((entry as any).minCount, 0) ?? undefined;
-        const negate = !!(entry as any).negate;
-        const repeat = !!(entry as any).repeat;
-        out.push({ kind: 'requireTroopInRange', presetId, distance, minCount, negate, repeat });
+        const minCount = this.toNullableIntMin(entry.minCount, 0) ?? undefined;
+        const negate = !!entry.negate;
+        const repeat = !!entry.repeat;
+        out.push({
+          kind: 'requireTroopInRange',
+          presetId,
+          distance,
+          minCount,
+          negate,
+          repeat,
+        });
         continue;
       }
       // legacy compatibility
       if (kind === 'requireAdjacentTag') {
-        const tagId = String((entry as any).tagId ?? '').trim();
+        const tagId = String(entry.tagId ?? '').trim();
         if (!tagId) continue;
-        const minCount = this.toNullableIntMin((entry as any).minCount, 0) ?? undefined;
-        out.push({ kind: 'requireTagInRange', tagPresetId: tagId, distance: 1, minCount });
+        const minCount = this.toNullableIntMin(entry.minCount, 0) ?? undefined;
+        out.push({
+          kind: 'requireTagInRange',
+          tagPresetId: tagId,
+          distance: 1,
+          minCount,
+        });
         continue;
       }
       if (kind === 'requireAdjacentBuilding') {
-        const presetId = String((entry as any).presetId ?? '').trim();
+        const presetId = String(entry.presetId ?? '').trim();
         if (!presetId) continue;
-        const minCount = this.toNullableIntMin((entry as any).minCount, 0) ?? undefined;
-        out.push({ kind: 'requireBuildingInRange', presetId, distance: 1, minCount });
+        const minCount = this.toNullableIntMin(entry.minCount, 0) ?? undefined;
+        out.push({
+          kind: 'requireBuildingInRange',
+          presetId,
+          distance: 1,
+          minCount,
+        });
         continue;
       }
       if (kind === 'custom') {
-        const label = String((entry as any).label ?? '').trim();
+        const label = String(entry.label ?? '').trim();
         if (!label) continue;
         out.push({ kind: 'custom', label });
       }
@@ -3220,7 +3816,7 @@ export class WorldMapsService implements OnModuleInit {
         String(entry.target ?? '').trim() === 'range' ? 'range' : 'self';
       const distance =
         target === 'range'
-          ? this.toNullableIntMin(entry.distance, 0) ?? 1
+          ? (this.toNullableIntMin(entry.distance, 0) ?? 1)
           : undefined;
       return target === 'range' ? { target, distance } : { target };
     };
@@ -3230,7 +3826,8 @@ export class WorldMapsService implements OnModuleInit {
       const kind = String(cast.kind ?? '').trim();
       if (!kind) continue;
       if (kind === 'adjustResource') {
-        const resourceId = this.normalizeBuildingResourceId(cast.resourceId) ?? 'gold';
+        const resourceId =
+          this.normalizeBuildingResourceId(cast.resourceId) ?? 'gold';
         out.push({
           kind,
           resourceId,
@@ -3242,7 +3839,9 @@ export class WorldMapsService implements OnModuleInit {
       if (kind === 'adjustResourceCap') {
         const capped = ['wood', 'stone', 'fabric', 'weave', 'food'] as const;
         const resourceIdRaw = String(cast.resourceId ?? '').trim();
-        const resourceId: (typeof capped)[number] = capped.includes(resourceIdRaw as any)
+        const resourceId: (typeof capped)[number] = capped.includes(
+          resourceIdRaw as any,
+        )
           ? (resourceIdRaw as (typeof capped)[number])
           : 'wood';
         out.push({
@@ -3262,7 +3861,8 @@ export class WorldMapsService implements OnModuleInit {
           populationIdRaw === 'laborers'
             ? (populationIdRaw as PopulationTrackedId)
             : 'settlers';
-        const field = String(cast.field ?? '').trim() === 'total' ? 'total' : 'available';
+        const field =
+          String(cast.field ?? '').trim() === 'total' ? 'total' : 'available';
         out.push({
           kind,
           populationId,
@@ -3326,7 +3926,9 @@ export class WorldMapsService implements OnModuleInit {
         out.push({
           kind,
           tagPresetId,
-          ...(cast.value != null ? { value: String(cast.value ?? '').trim() } : {}),
+          ...(cast.value != null
+            ? { value: String(cast.value ?? '').trim() }
+            : {}),
           ...(String(cast.target ?? '').trim() === 'range'
             ? { excludeSelf: !!cast.excludeSelf }
             : {}),
@@ -3358,10 +3960,10 @@ export class WorldMapsService implements OnModuleInit {
     const out: BuildingExecutionRule[] = [];
     for (const entry of input) {
       if (!entry || typeof entry !== 'object') continue;
-      const id = String((entry as any).id ?? '').trim() || randomUUID();
-      const actions = this.normalizeActionsInput((entry as any).actions);
+      const id = String(entry.id ?? '').trim() || randomUUID();
+      const actions = this.normalizeActionsInput(entry.actions);
       if (actions.length === 0) continue;
-      const intervalRaw = Math.trunc(Number((entry as any).intervalDays));
+      const intervalRaw = Math.trunc(Number(entry.intervalDays));
       const intervalDays =
         withInterval && Number.isFinite(intervalRaw)
           ? Math.max(1, intervalRaw)
@@ -3369,17 +3971,18 @@ export class WorldMapsService implements OnModuleInit {
             ? 1
             : undefined;
       const when =
-        (entry as any).when && typeof (entry as any).when === 'object'
-          ? ((entry as any).when as any)
-          : undefined;
-      out.push({ id, ...(withInterval ? { intervalDays } : {}), when, actions });
+        entry.when && typeof entry.when === 'object' ? entry.when : undefined;
+      out.push({
+        id,
+        ...(withInterval ? { intervalDays } : {}),
+        when,
+        actions,
+      });
     }
     return out.length > 0 ? out : undefined;
   }
 
-  private normalizeUpkeepInput(
-    input: unknown,
-  ):
+  private normalizeUpkeepInput(input: unknown):
     | {
         resources?: Partial<Record<BuildingResourceId, number>>;
         population?: Partial<Record<UpkeepPopulationId, number>>;
@@ -3390,12 +3993,13 @@ export class WorldMapsService implements OnModuleInit {
     const resources = this.normalizeResourceCostsInput(src.resources);
     const population = this.normalizePopulationCostsInput(src.population);
     if (!resources && !population) return undefined;
-    return { ...(resources ? { resources } : {}), ...(population ? { population } : {}) };
+    return {
+      ...(resources ? { resources } : {}),
+      ...(population ? { population } : {}),
+    };
   }
 
-  private normalizeEffectsInput(
-    input: unknown,
-  ):
+  private normalizeEffectsInput(input: unknown):
     | {
         onBuild?: BuildingExecutionRule[];
         daily?: BuildingExecutionRule[];
@@ -3465,7 +4069,9 @@ export class WorldMapsService implements OnModuleInit {
       cityGlobal: this.normalizeCityGlobalInput(src.cityGlobal),
       tileStatePresets: presets,
       tileStateAssignments: assignments,
-      tileRegionStates: this.normalizeTileRegionStatesInput(src.tileRegionStates),
+      tileRegionStates: this.normalizeTileRegionStatesInput(
+        src.tileRegionStates,
+      ),
       tileMemos: this.normalizeTileMemosInput(src.tileMemos),
       buildingPresets: this.normalizeBuildingPresetsInput(src.buildingPresets),
       ...(createdAt ? { createdAt } : {}),
@@ -3515,7 +4121,9 @@ export class WorldMapsService implements OnModuleInit {
   }
 
   private normalizePresetFolderKind(value: unknown): WorldMapPresetFolderKind {
-    const kind = String(value ?? '').trim().toLowerCase();
+    const kind = String(value ?? '')
+      .trim()
+      .toLowerCase();
     if ((WORLD_MAP_PRESET_FOLDER_KINDS as readonly string[]).includes(kind)) {
       return kind as WorldMapPresetFolderKind;
     }
@@ -3651,7 +4259,8 @@ export class WorldMapsService implements OnModuleInit {
     if (!src || typeof src !== 'object') return {};
     const out: Record<string, MapTileRegionState> = {};
     const toIntOrUndef = (v: unknown): number | undefined => {
-      if (v === null || v === undefined || String(v).trim() === '') return undefined;
+      if (v === null || v === undefined || String(v).trim() === '')
+        return undefined;
       const n = Math.trunc(Number(v));
       if (!Number.isFinite(n)) return undefined;
       return n;
@@ -3799,12 +4408,21 @@ export class WorldMapsService implements OnModuleInit {
     };
     const normalizeTrackedPopulation = (id: PopulationTrackedId) => {
       const entry = populationIn?.[id] ?? {};
-      const total = toIntSafe(entry.total, DEFAULT_CITY_GLOBAL.population[id].total);
+      const total = toIntSafe(
+        entry.total,
+        DEFAULT_CITY_GLOBAL.population[id].total,
+      );
+      const hasAvailable =
+        entry != null &&
+        typeof entry === 'object' &&
+        Object.prototype.hasOwnProperty.call(entry, 'available');
       const available = Math.min(
         total,
         toIntSafe(
           entry.available,
-          DEFAULT_CITY_GLOBAL.population[id].available ?? 0,
+          hasAvailable
+            ? (DEFAULT_CITY_GLOBAL.population[id].available ?? 0)
+            : total,
         ),
       );
       return { total, available };
@@ -3821,9 +4439,12 @@ export class WorldMapsService implements OnModuleInit {
         );
         const hasAvailable =
           populationIn?.elderly != null &&
-          Object.prototype.hasOwnProperty.call(populationIn.elderly, 'available');
+          Object.prototype.hasOwnProperty.call(
+            populationIn.elderly,
+            'available',
+          );
         const fallbackAvailable = hasAvailable
-          ? (DEFAULT_CITY_GLOBAL.population.elderly as any).available ?? 0
+          ? ((DEFAULT_CITY_GLOBAL.population.elderly as any).available ?? 0)
           : total;
         const available = Math.min(
           total,
@@ -3849,7 +4470,10 @@ export class WorldMapsService implements OnModuleInit {
         fabric: toIntSafe(valuesIn.fabric, DEFAULT_CITY_GLOBAL.values.fabric),
         weave: toIntSafe(valuesIn.weave, DEFAULT_CITY_GLOBAL.values.weave),
         food: toIntSafe(valuesIn.food, DEFAULT_CITY_GLOBAL.values.food),
-        research: toIntSafe(valuesIn.research, DEFAULT_CITY_GLOBAL.values.research),
+        research: toIntSafe(
+          valuesIn.research,
+          DEFAULT_CITY_GLOBAL.values.research,
+        ),
         order: toIntSafe(valuesIn.order, DEFAULT_CITY_GLOBAL.values.order),
         gold: toIntSafe(valuesIn.gold, DEFAULT_CITY_GLOBAL.values.gold),
       },
@@ -3861,11 +4485,26 @@ export class WorldMapsService implements OnModuleInit {
         food: toIntSafe(capsIn.food, DEFAULT_CITY_GLOBAL.caps.food),
       },
       overflowToGold: {
-        wood: toIntSafe(overflowToGoldIn.wood, DEFAULT_CITY_GLOBAL.overflowToGold.wood),
-        stone: toIntSafe(overflowToGoldIn.stone, DEFAULT_CITY_GLOBAL.overflowToGold.stone),
-        fabric: toIntSafe(overflowToGoldIn.fabric, DEFAULT_CITY_GLOBAL.overflowToGold.fabric),
-        weave: toIntSafe(overflowToGoldIn.weave, DEFAULT_CITY_GLOBAL.overflowToGold.weave),
-        food: toIntSafe(overflowToGoldIn.food, DEFAULT_CITY_GLOBAL.overflowToGold.food),
+        wood: toIntSafe(
+          overflowToGoldIn.wood,
+          DEFAULT_CITY_GLOBAL.overflowToGold.wood,
+        ),
+        stone: toIntSafe(
+          overflowToGoldIn.stone,
+          DEFAULT_CITY_GLOBAL.overflowToGold.stone,
+        ),
+        fabric: toIntSafe(
+          overflowToGoldIn.fabric,
+          DEFAULT_CITY_GLOBAL.overflowToGold.fabric,
+        ),
+        weave: toIntSafe(
+          overflowToGoldIn.weave,
+          DEFAULT_CITY_GLOBAL.overflowToGold.weave,
+        ),
+        food: toIntSafe(
+          overflowToGoldIn.food,
+          DEFAULT_CITY_GLOBAL.overflowToGold.food,
+        ),
       },
       foodDeficitGoldRate: toIntSafe(
         foodDeficitGoldRateIn,
@@ -3913,7 +4552,12 @@ export class WorldMapsService implements OnModuleInit {
     return num;
   }
 
-  private toInt(value: unknown, label: string, min: number, max: number): number {
+  private toInt(
+    value: unknown,
+    label: string,
+    min: number,
+    max: number,
+  ): number {
     const num = Math.trunc(Number(value));
     if (!Number.isFinite(num) || num < min || num > max) {
       throw new BadRequestException(`${label} out of range`);
@@ -3921,7 +4565,12 @@ export class WorldMapsService implements OnModuleInit {
     return num;
   }
 
-  private toNumberRange(value: unknown, label: string, min: number, max: number): number {
+  private toNumberRange(
+    value: unknown,
+    label: string,
+    min: number,
+    max: number,
+  ): number {
     const num = Number(value);
     if (!Number.isFinite(num) || num < min || num > max) {
       throw new BadRequestException(`${label} out of range`);
@@ -3929,6 +4578,3 @@ export class WorldMapsService implements OnModuleInit {
     return num;
   }
 }
-
-
-

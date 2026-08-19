@@ -124,7 +124,8 @@ function escapeRegExp(s: string): string {
 function extractBlocks(
   content: string,
 ): Array<{ lang: string; body: string; start: number; end: number }> {
-  const out: Array<{ lang: string; body: string; start: number; end: number }> = [];
+  const out: Array<{ lang: string; body: string; start: number; end: number }> =
+    [];
   const re = /```([a-zA-Z0-9_-]*)\n?([\s\S]*?)```/g;
   let m: RegExpExecArray | null = null;
   while ((m = re.exec(content)) !== null) {
@@ -246,7 +247,11 @@ export class DiceSearchService {
     return this.index.syncedAt;
   }
 
-  async syncAll(): Promise<{ spells: number; skills: number; syncedAt: number }> {
+  async syncAll(): Promise<{
+    spells: number;
+    skills: number;
+    syncedAt: number;
+  }> {
     const spells = await this.syncSpellsToDb();
     const skills = await this.syncSkillsToDb();
     const syncedAt = Date.now();
@@ -254,7 +259,10 @@ export class DiceSearchService {
     return { spells, skills, syncedAt };
   }
 
-  async searchTop(scope: SearchScope, keyword: string): Promise<SearchMatch | null> {
+  async searchTop(
+    scope: SearchScope,
+    keyword: string,
+  ): Promise<SearchMatch | null> {
     if (scope === 'skill') {
       return this.searchSkillTopDb(keyword);
     }
@@ -497,7 +505,7 @@ export class DiceSearchService {
 
       const threads = await this.fetchAllThreads(ch as any);
       for (const thread of threads) {
-        const msgs = await this.fetchAllMessages(thread as any);
+        const msgs = await this.fetchAllMessages(thread);
         for (const msg of msgs) {
           const row = this.parseSpellFromMessage(msg, {
             channelId: ch.id,
@@ -544,7 +552,7 @@ export class DiceSearchService {
       const allThreads = await this.fetchAllThreads(ch as any);
 
       for (const thread of allThreads) {
-        const msgs = await this.fetchAllMessages(thread as any);
+        const msgs = await this.fetchAllMessages(thread);
         for (const msg of msgs) {
           const row = this.parseSkillFromMessage(msg, {
             channelId: ch.id,
@@ -669,7 +677,9 @@ export class DiceSearchService {
     const archivedAny = await channel.threads
       .fetchArchived?.({ fetchAll: true })
       .catch(() => null);
-    const archivedAnyThreads = archivedAny ? [...archivedAny.threads.values()] : [];
+    const archivedAnyThreads = archivedAny
+      ? [...archivedAny.threads.values()]
+      : [];
 
     const archivedPublic = await channel.threads
       .fetchArchived?.({ type: 'public', fetchAll: true })
@@ -701,7 +711,10 @@ export class DiceSearchService {
     return out;
   }
 
-  private async diagnoseOne(scope: SearchScope, channelId: string): Promise<ScopeDiag> {
+  private async diagnoseOne(
+    scope: SearchScope,
+    channelId: string,
+  ): Promise<ScopeDiag> {
     const warnings: string[] = [];
     const ch = await this.client.channels.fetch(channelId).catch((e) => {
       warnings.push(`fetch 실패: ${e?.message ?? e}`);
@@ -732,7 +745,8 @@ export class DiceSearchService {
           return null;
         })
       : null;
-    const perms = (ch as any).permissionsFor?.(me ?? this.client.user ?? null) ?? null;
+    const perms =
+      (ch as any).permissionsFor?.(me ?? this.client.user ?? null) ?? null;
 
     const canView = perms ? perms.has(PermissionFlagsBits.ViewChannel) : null;
     const canReadHistory = perms
@@ -821,12 +835,15 @@ export class DiceSearchService {
       }
     }
 
-    const fields = mainBlockIdx >= 1 ? parseLabeledFields(blocks[mainBlockIdx].body) : {};
+    const fields =
+      mainBlockIdx >= 1 ? parseLabeledFields(blocks[mainBlockIdx].body) : {};
     const extraBlocks = blocks
       .filter((_, i) => i !== 0 && i !== mainBlockIdx)
       .map((b) => unansi(b.body).trim())
       .filter((v) => !!v);
-    const commentText = extraBlocks.length ? extraBlocks.join('\n\n') : undefined;
+    const commentText = extraBlocks.length
+      ? extraBlocks.join('\n\n')
+      : undefined;
 
     const lastEnd = blocks[blocks.length - 1]?.end ?? first.end;
     const tail = content.slice(lastEnd).trim();
@@ -934,7 +951,11 @@ export class DiceSearchService {
       ? threadName.replace(/^기술[-_\s]*/, '').trim()
       : undefined;
     const jobName =
-      jobFromChannel || jobFromThread || threadName || loc.channelName || 'unknown';
+      jobFromChannel ||
+      jobFromThread ||
+      threadName ||
+      loc.channelName ||
+      'unknown';
     const skillKey = `${normalize(jobName)}:${normalize(skillName)}`;
 
     return {

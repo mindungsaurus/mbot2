@@ -506,9 +506,7 @@ export class DiceCommands {
         });
       }
 
-      let match = null as Awaited<
-        ReturnType<DiceSearchService['searchTop']>
-      >;
+      let match = null as Awaited<ReturnType<DiceSearchService['searchTop']>>;
       if (scope === 'spell') {
         const lvNo = keyword.match(/^\s*(\d+)\.(\d+)\s*$/);
         if (lvNo) {
@@ -536,7 +534,10 @@ export class DiceCommands {
 
       const doc = match.doc;
       const header = `${doc.messageUrl}\n\n**\`\`\`\n${doc.title}\n\`\`\`**\n`;
-      const bodyChunks = splitBodyPreservingFences(doc.body ?? '', DISCORD_MSG_LIMIT);
+      const bodyChunks = splitBodyPreservingFences(
+        doc.body ?? '',
+        DISCORD_MSG_LIMIT,
+      );
 
       const messages: string[] = [];
       let firstMsg = header;

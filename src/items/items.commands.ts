@@ -650,7 +650,7 @@ export class ItemsCommands {
     }
 
     try {
-      let result = new ItemTransactionResult();
+      const result = new ItemTransactionResult();
       await this.itemsService.AddAlias(itemsAliasDTO, result);
 
       return interaction.reply({
@@ -723,7 +723,7 @@ export class ItemsCommands {
     }
 
     try {
-      let result = new ItemTransactionResult();
+      const result = new ItemTransactionResult();
       await this.itemsService.DeleteAlias(ItemsNameDTO, result);
 
       return interaction.reply({
@@ -1023,7 +1023,7 @@ export class ItemsCommands {
     }
   }
 
-  public ColorParser(quality: String | null): TextColor {
+  public ColorParser(quality: string | null): TextColor {
     switch (quality) {
       case '고급':
         return TextColor.BOLD_LIME;

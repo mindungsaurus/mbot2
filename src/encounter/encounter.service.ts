@@ -184,7 +184,10 @@ export class EncounterService {
     prev.updatedAt = new Date().toISOString();
 
     await this.prisma.$transaction(async (tx) => {
-      await tx.encounter.update({ where: { id }, data: { state: asJson(prev) } });
+      await tx.encounter.update({
+        where: { id },
+        data: { state: asJson(prev) },
+      });
       await tx.encounterUndo.delete({ where: { id: last.id } });
     });
 
@@ -249,7 +252,11 @@ export class EncounterService {
     return map;
   }
 
-  async setDefaultPublishChannel(userId: string, id: string, channelId: string) {
+  async setDefaultPublishChannel(
+    userId: string,
+    id: string,
+    channelId: string,
+  ) {
     const cur = await this.get(userId, id);
     const next = {
       ...cur,
@@ -285,8 +292,8 @@ export class EncounterService {
       const normalized: Array<{ x: number; z: number }> = [];
       for (const raw of (next as any).blockedCells as any[]) {
         if (!raw) continue;
-        const x = Math.floor(Number((raw as any).x));
-        const z = Math.floor(Number((raw as any).z));
+        const x = Math.floor(Number(raw.x));
+        const z = Math.floor(Number(raw.z));
         if (!Number.isFinite(x) || !Number.isFinite(z)) continue;
         const key = `${x},${z}`;
         if (seen.has(key)) continue;
@@ -314,14 +321,18 @@ export class EncounterService {
     };
 
     const rawGridLabels = (next as any).gridLabels;
-    if (!rawGridLabels || typeof rawGridLabels !== 'object' || Array.isArray(rawGridLabels)) {
+    if (
+      !rawGridLabels ||
+      typeof rawGridLabels !== 'object' ||
+      Array.isArray(rawGridLabels)
+    ) {
       (next as any).gridLabels = { x: {}, z: {} };
       changed = true;
     } else {
-      const normalizedX = normalizeGridLabelMap((rawGridLabels as any).x);
-      const normalizedZ = normalizeGridLabelMap((rawGridLabels as any).z);
-      const prevX = (rawGridLabels as any).x ?? {};
-      const prevZ = (rawGridLabels as any).z ?? {};
+      const normalizedX = normalizeGridLabelMap(rawGridLabels.x);
+      const normalizedZ = normalizeGridLabelMap(rawGridLabels.z);
+      const prevX = rawGridLabels.x ?? {};
+      const prevZ = rawGridLabels.z ?? {};
       const sameX = JSON.stringify(prevX) === JSON.stringify(normalizedX);
       const sameZ = JSON.stringify(prevZ) === JSON.stringify(normalizedZ);
       if (!sameX || !sameZ) changed = true;
@@ -464,9 +475,7 @@ export class EncounterService {
     // turnIndex 보정: "유닛/그룹만 턴 주체" (label이면 첫 턴 엔트리로)
     const order = (next as any).turnOrder as any[];
     const entryIdxs = order
-      .map((t, i) =>
-        t?.kind === 'unit' || t?.kind === 'group' ? i : -1,
-      )
+      .map((t, i) => (t?.kind === 'unit' || t?.kind === 'group' ? i : -1))
       .filter((i) => i >= 0);
 
     const rawTi = Math.floor((next as any).turnIndex ?? 0);

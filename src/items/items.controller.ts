@@ -4,7 +4,9 @@ import {
   Controller,
   Get,
   Param,
+  Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ItemsService, GiveResult } from './items.service';
@@ -44,7 +46,11 @@ export class ItemsController {
   ) {
     const white = this.items.ansiColor(TextColor.BOLD_WHITE);
     const blue = this.items.ansiColor(TextColor.BOLD_BLUE);
-    const itemAnsi = this.items.formatItemNameAnsi(itemName, qualityLabel, blue);
+    const itemAnsi = this.items.formatItemNameAnsi(
+      itemName,
+      qualityLabel,
+      blue,
+    );
     return [
       `${white} \u{1F4E6}\u{1F4CB} [\uc544\uc774\ud15c \uc815\ubcf4 \ub4f1\ub85d \uc774\ubca4\ud2b8 \ubc1c\uc0dd \uc54c\ub9bc]`,
       `${blue} ${type}${itemAnsi}${blue} \uc758 \uc815\ubcf4\uac00 DB\uc5d0 \ub4f1\ub85d\ub418\uc5c8\ub2e4.`,
@@ -59,7 +65,11 @@ export class ItemsController {
     unit: string,
   ) {
     const white = this.items.ansiColor(TextColor.BOLD_WHITE);
-    const itemAnsi = this.items.formatItemNameAnsi(itemName, qualityLabel, white);
+    const itemAnsi = this.items.formatItemNameAnsi(
+      itemName,
+      qualityLabel,
+      white,
+    );
     return [
       `${white} \u{1F4E6} [\uc544\uc774\ud15c \ud68d\ub4dd \uc774\ubca4\ud2b8 \ubc1c\uc0dd \uc54c\ub9bc]`,
       `${white} \u300c${owner}\u300d, ${itemAnsi}${white} \uc744(\ub97c) ${amount}${unit}\ub9cc\ud07c \ud68d\ub4dd\ud558\uc600\ub2e4.`,
@@ -76,7 +86,11 @@ export class ItemsController {
   ) {
     const white = this.items.ansiColor(TextColor.BOLD_WHITE);
     const gray = this.items.ansiColor(TextColor.BOLD_GRAY);
-    const itemAnsi = this.items.formatItemNameAnsi(itemName, qualityLabel, white);
+    const itemAnsi = this.items.formatItemNameAnsi(
+      itemName,
+      qualityLabel,
+      white,
+    );
     const itemAnsiGray = this.items.formatItemNameAnsi(
       itemName,
       qualityLabel,
@@ -101,7 +115,11 @@ export class ItemsController {
   ) {
     const white = this.items.ansiColor(TextColor.BOLD_WHITE);
     const gray = this.items.ansiColor(TextColor.BOLD_GRAY);
-    const itemAnsi = this.items.formatItemNameAnsi(itemName, qualityLabel, white);
+    const itemAnsi = this.items.formatItemNameAnsi(
+      itemName,
+      qualityLabel,
+      white,
+    );
     return [
       `${white} \u{1F4E6} [\uc544\uc774\ud15c \uc804\ub2ec \uc774\ubca4\ud2b8 \ubc1c\uc0dd \uc54c\ub9bc]`,
       `${white} \u300c${from}\u300d, \u300c${to}\u300d\uc5d0\uac8c ${itemAnsi} \ub97c ${amount}${unit}\ub9cc\ud07c \uc804\ub2ec\ud558\uc600\ub2e4.`,
@@ -122,7 +140,20 @@ export class ItemsController {
 
   @Get('catalog')
   @UseGuards(AuthGuard)
-  async listCatalog() {
+  async listCatalog(
+    @Query('query') query?: string,
+    @Query('page') page?: string,
+    @Query('pageSize') pageSize?: string,
+    @Query('type') type?: string,
+  ) {
+    if (
+      query !== undefined ||
+      page !== undefined ||
+      pageSize !== undefined ||
+      type !== undefined
+    ) {
+      return this.items.SearchItemCatalog({ query, page, pageSize, type });
+    }
     return this.items.ListItemCatalog();
   }
 
@@ -160,6 +191,22 @@ export class ItemsController {
     const ansi = this.buildRegisterAnsi(itemName, quality, type);
     await this.sendItemEvent(channelId, ansi);
     return { ok: true };
+  }
+
+  @Patch('catalog')
+  @UseGuards(AuthGuard, AdminGuard)
+  async updateCatalog(
+    @Body()
+    body: {
+      itemName?: string;
+      quality?: string;
+    },
+  ) {
+    const itemName = (body?.itemName ?? '').trim();
+    const quality = (body?.quality ?? '').trim();
+    if (!itemName) throw new BadRequestException('item name required');
+    if (!quality) throw new BadRequestException('item quality required');
+    return this.items.UpdateItemQuality(itemName, quality);
   }
 
   @Post('inventory/add')
@@ -277,5 +324,4 @@ export class ItemsController {
     await this.sendItemEvent(channelId, ansi);
     return { ok: true, ...result };
   }
-
 }

@@ -109,6 +109,13 @@ type ItemInfoPage = {
   items: ItemInfoRow[];
 };
 
+type ItemCatalogSearchParams = {
+  query?: string;
+  page?: string;
+  pageSize?: string;
+  type?: string;
+};
+
 type AliasRow = {
   itemName: string;
   alias: string;
@@ -145,6 +152,18 @@ export class InventorySearchResult {
 }
 
 const PAGE_SIZE = 20;
+
+function normalizePage(value: unknown) {
+  const page = Math.trunc(Number(value ?? 1));
+  if (!Number.isFinite(page) || page < 1) return 1;
+  return page;
+}
+
+function normalizePageSize(value: unknown, fallback = PAGE_SIZE, max = 50) {
+  const pageSize = Math.trunc(Number(value ?? fallback));
+  if (!Number.isFinite(pageSize) || pageSize < 1) return fallback;
+  return Math.min(pageSize, max);
+}
 
 type Align = 'left' | 'right';
 
@@ -401,6 +420,40 @@ export class ItemsService {
     });
   }
 
+  public async SearchItemCatalog(params: ItemCatalogSearchParams) {
+    const query = String(params.query ?? '').trim();
+    const type = String(params.type ?? '').trim();
+    const page = normalizePage(params.page);
+    const pageSize = normalizePageSize(params.pageSize);
+    const where: any = {};
+    if (query) {
+      where.name = { contains: query, mode: 'insensitive' };
+    }
+    if (type) {
+      where.type = type;
+    }
+
+    const totalItems = await this.prisma.itemsInfo.count({ where });
+    const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+    const safePage = Math.min(page, totalPages);
+    const items = await this.prisma.itemsInfo.findMany({
+      where,
+      orderBy: { name: 'asc' },
+      skip: (safePage - 1) * pageSize,
+      take: pageSize,
+    });
+
+    return {
+      page: safePage,
+      pageSize,
+      totalItems,
+      totalPages,
+      hasPrev: safePage > 1,
+      hasNext: safePage < totalPages,
+      items,
+    };
+  }
+
   public async RemoveItemInventory(
     owner: string,
     itemName: string,
@@ -465,6 +518,30 @@ export class ItemsService {
       this.logger.error(`Error while adding item info`);
       throw err;
     }
+  }
+
+  public async UpdateItemQuality(
+    itemName: string,
+    quality: string,
+  ): Promise<ItemInfoRow> {
+    const name = itemName.trim();
+    const nextQuality = quality.trim();
+    if (!name) throw new BadRequestException('유효하지 않은 아이템 이름');
+    if (!ALLOWED_QUALITY.has(nextQuality)) {
+      throw new BadRequestException('유효하지 않은 아이템 등급');
+    }
+
+    const item = await this.prisma.itemsInfo.findUnique({
+      where: { name },
+      select: { name: true },
+    });
+    if (!item) throw new NotFoundException('item not found');
+
+    return this.prisma.itemsInfo.update({
+      where: { name },
+      data: { quality: this.QualityStringParser(nextQuality) },
+      select: { name: true, quality: true, type: true, unit: true },
+    });
   }
 
   public async TryUseItemInventory(
@@ -681,9 +758,9 @@ export class ItemsService {
         return {
           name: info.name,
           amount,
-          quality: info.quality as number,
-          type: info.type as string,
-          unit: info.unit as string,
+          quality: info.quality,
+          type: info.type,
+          unit: info.unit,
         };
       })
       .filter((v): v is ListedItem => v !== null);
@@ -1103,8 +1180,8 @@ export class ItemsService {
       ].join('ㅣ') + '\n';
 
     for (const r of page.items) {
-      let qualityString = this.QualityNumParser(r.quality);
-      let color = this.ColorParser(qualityString);
+      const qualityString = this.QualityNumParser(r.quality);
+      const color = this.ColorParser(qualityString);
       let colorString = this.goldService.StringFormatter(
         '',
         color,
@@ -1157,8 +1234,8 @@ export class ItemsService {
     result += ['ㅡ'.repeat(W.name), 'ㅡ'.repeat(W.alias)].join('ㅣ') + '\n';
 
     for (const r of page.alias) {
-      let qualityString = this.QualityNumParser(r.quality);
-      let color = this.ColorParser(qualityString);
+      const qualityString = this.QualityNumParser(r.quality);
+      const color = this.ColorParser(qualityString);
       let colorString = this.goldService.StringFormatter(
         '',
         color,
@@ -1331,7 +1408,7 @@ export class ItemsService {
     let result = '\n';
     const categoryList = category[key];
 
-    let prevQuality = '없음';
+    const prevQuality = '없음';
     let color = TextColor.NONE;
 
     if (categoryList && categoryList.length > 0) {
@@ -1421,7 +1498,7 @@ export class ItemsService {
     return quality;
   }
 
-  public ColorParser(quality: String | null): TextColor {
+  public ColorParser(quality: string | null): TextColor {
     switch (quality) {
       case '고급':
         return TextColor.BOLD_LIME;
@@ -1503,23 +1580,23 @@ export class ItemsService {
   public ansiColor(color: TextColor): string {
     switch (color) {
       case TextColor.BOLD_YELLOW:
-        return "[1;33m";
+        return '[1;33m';
       case TextColor.BOLD_RED:
-        return "[1;31m";
+        return '[1;31m';
       case TextColor.BOLD_GREEN:
-        return "[1;36m";
+        return '[1;36m';
       case TextColor.BOLD_WHITE:
-        return "[1;38m";
+        return '[1;38m';
       case TextColor.BOLD_PINK:
-        return "[1;35m";
+        return '[1;35m';
       case TextColor.BOLD_BLUE:
-        return "[2;34m";
+        return '[2;34m';
       case TextColor.BOLD_LIME:
-        return "[1;32m";
+        return '[1;32m';
       case TextColor.BOLD_GRAY:
-        return "[1;30m";
+        return '[1;30m';
       default:
-        return "";
+        return '';
     }
   }
 
@@ -1542,12 +1619,12 @@ export class ItemsService {
       select: { quality: true, type: true, unit: true },
     });
     if (!row) {
-      return { qualityLabel: "", type: "", unit: "" };
+      return { qualityLabel: '', type: '', unit: '' };
     }
     return {
       qualityLabel: this.QualityNumParser(row.quality),
-      type: row.type ?? "",
-      unit: row.unit ?? "",
+      type: row.type ?? '',
+      unit: row.unit ?? '',
     };
   }
 }

@@ -220,7 +220,7 @@ export interface EncounterState {
   turnGroups?: TurnGroup[];
   turnPriorities?: Record<string, number>;
   turnIndex: number;
-  turnEndSnapshots?: Record<string, TurnEndSnapshot>
+  turnEndSnapshots?: Record<string, TurnEndSnapshot>;
   turnStartSnapshots?: Record<string, TurnEndSnapshot>;
   battleStarted?: boolean;
   identifierCounters?: Record<string, number>;
@@ -385,7 +385,12 @@ export type Action =
   | { type: 'SET_UNIT_POS'; unitId: string; x: number; z: number }
   | { type: 'MOVE_UNIT'; unitId: string; dx?: number; dz?: number }
   | { type: 'TOGGLE_BLOCKED_CELL'; x: number; z: number; blocked?: boolean }
-  | { type: 'SET_GRID_LABEL'; axis: 'x' | 'z'; index: number; label?: string | null }
+  | {
+      type: 'SET_GRID_LABEL';
+      axis: 'x' | 'z';
+      index: number;
+      label?: string | null;
+    }
   | {
       type: 'UPSERT_MARKER';
       markerId: string;
@@ -403,7 +408,7 @@ export type Action =
       name: string;
       alias?: string;
       side: Side;
-  bench?: BenchGroup;
+      bench?: BenchGroup;
       unitType?: UnitType;
       masterUnitId?: string;
       note?: string;

@@ -6,7 +6,10 @@ import {
   getComputedIntegrity,
   getDisplayTags,
 } from './encounter.compute';
-import { buildDistanceMarkLines, buildFormationLines } from './encounter.formation';
+import {
+  buildDistanceMarkLines,
+  buildFormationLines,
+} from './encounter.formation';
 
 const RESET = '\x1b[0m';
 const GRAY = '\x1b[0;37m';
@@ -91,7 +94,10 @@ function groupHasMembers(state: EncounterState, groupId: string): boolean {
   return false;
 }
 
-function splitIdentifierLabel(label: string): { base: string; suffix: string | null } {
+function splitIdentifierLabel(label: string): {
+  base: string;
+  suffix: string | null;
+} {
   const raw = (label ?? '').trim();
   if (!raw) return { base: raw, suffix: null };
   const bracket = raw.match(/\[([^\]]+)\]$/u);
@@ -106,7 +112,11 @@ function splitIdentifierLabel(label: string): { base: string; suffix: string | n
 }
 
 function collapseIdentifierLabels(labels: string[]): string[] {
-  const grouped: Array<{ base: string; label: string; suffixes: string[] | null }> = [];
+  const grouped: Array<{
+    base: string;
+    label: string;
+    suffixes: string[] | null;
+  }> = [];
   const baseIndex = new Map<string, number>();
   for (const label of labels) {
     const { base, suffix } = splitIdentifierLabel(label);
@@ -122,7 +132,9 @@ function collapseIdentifierLabels(labels: string[]): string[] {
     }
     grouped.push({ base: label, label, suffixes: null });
   }
-  return grouped.map((g) => (g.suffixes ? `${g.base}${g.suffixes.join('')}` : g.label));
+  return grouped.map((g) =>
+    g.suffixes ? `${g.base}${g.suffixes.join('')}` : g.label,
+  );
 }
 
 function groupMembersSummary(state: EncounterState, groupId: string): string {
@@ -146,14 +158,20 @@ function groupMembersSummary(state: EncounterState, groupId: string): string {
 }
 
 function getTurnPriority(state: EncounterState, key: string): number | null {
-  const map = (state as any).turnPriorities as Record<string, number> | undefined;
+  const map = (state as any).turnPriorities as
+    | Record<string, number>
+    | undefined;
   if (!map || typeof map !== 'object') return null;
   const n = Math.floor(Number((map as any)[key]));
   if (!Number.isFinite(n) || n <= 0) return null;
   return n;
 }
 
-function withTurnPriority(state: EncounterState, key: string, text: string): string {
+function withTurnPriority(
+  state: EncounterState,
+  key: string,
+  text: string,
+): string {
   const n = getTurnPriority(state, key);
   if (n == null) return text;
   return `${text} ${TURN_PRIORITY_COLOR}(${n})${color(38)}`;
@@ -278,7 +296,10 @@ function fmtAc(u: Unit) {
 }
 
 function tintDistanceIndex(line: string): string {
-  return line.replace(/(?:\[\d+\])+:/g, (m) => `${GROUP_MEMBERS_GRAY}${m}${RESET}${color(39)}`);
+  return line.replace(
+    /(?:\[\d+\])+:/g,
+    (m) => `${GROUP_MEMBERS_GRAY}${m}${RESET}${color(39)}`,
+  );
 }
 
 export function renderAnsi(
@@ -309,8 +330,10 @@ export function renderAnsi(
     lines.push(`${color(31)}<전투 개시되지 않음>${RESET}`);
   }
 
-  const teamNote = typeof sideNotes.TEAM === 'string' ? sideNotes.TEAM.trim() : '';
-  const enemyNote = typeof sideNotes.ENEMY === 'string' ? sideNotes.ENEMY.trim() : '';
+  const teamNote =
+    typeof sideNotes.TEAM === 'string' ? sideNotes.TEAM.trim() : '';
+  const enemyNote =
+    typeof sideNotes.ENEMY === 'string' ? sideNotes.ENEMY.trim() : '';
   const neutralNote =
     typeof sideNotes.NEUTRAL === 'string' ? sideNotes.NEUTRAL.trim() : '';
 
@@ -344,9 +367,7 @@ export function renderAnsi(
   const tempId = state.tempTurnStack?.length
     ? state.tempTurnStack[state.tempTurnStack.length - 1]
     : null;
-  const tempUnit = tempId
-    ? state.units.find((u) => u.id === tempId)
-    : null;
+  const tempUnit = tempId ? state.units.find((u) => u.id === tempId) : null;
   const tempName = tempUnit?.name ?? tempId ?? '';
   const tempSuffix = tempName ? ` - ${tempName}의 임시 턴` : '';
   lines.push(`${color(33)}Turn (Round ${safeRound})${tempSuffix}${RESET}`);
@@ -372,7 +393,9 @@ export function renderAnsi(
     planarMode,
   });
   if (distanceMarks.length === 0) lines.push(`${color(39)}-${RESET}`);
-  else for (const d of distanceMarks) lines.push(`${color(39)}${tintDistanceIndex(d)}${RESET}`);
+  else
+    for (const d of distanceMarks)
+      lines.push(`${color(39)}${tintDistanceIndex(d)}${RESET}`);
 
   return lines.join('\n');
 }
@@ -415,11 +438,10 @@ function renderTurnSummaryLines(
 
   for (const unit of summary.units ?? []) {
     if (unit.status === 'removed') continue;
-    const renderedChanges = (unit.changes ?? [])
-      .flatMap((change) => {
-        const rendered = renderSummaryChange(change, tagColors);
-        return Array.isArray(rendered) ? rendered : rendered ? [rendered] : [];
-      });
+    const renderedChanges = (unit.changes ?? []).flatMap((change) => {
+      const rendered = renderSummaryChange(change, tagColors);
+      return Array.isArray(rendered) ? rendered : rendered ? [rendered] : [];
+    });
     if (renderedChanges.length === 0) continue;
 
     const label = unit.alias ? `${unit.name} (${unit.alias})` : unit.name;
@@ -443,7 +465,9 @@ function renderTurnSummaryLines(
   if (renderedMarkers.length) {
     lines.push(`${color(36)}Markers${RESET}`);
     for (const { marker, changes } of renderedMarkers) {
-      const label = marker.alias ? `${marker.name} (${marker.alias})` : marker.name;
+      const label = marker.alias
+        ? `${marker.name} (${marker.alias})`
+        : marker.name;
       lines.push(`${GRAY}${label}${RESET}`);
       for (const rendered of changes) {
         lines.push(`${GRAY}- ${rendered}${RESET}`);
@@ -481,9 +505,12 @@ function renderSummaryChange(
   if (change.kind === 'hp') return renderHpSummaryChange(change);
   if (change.kind === 'deathSaves') return renderDeathSaveSummaryChange(change);
   if (change.kind === 'spellSlots') return renderSpellSlotSummaryChange(change);
-  if (change.kind === 'consumables') return renderConsumableSummaryChange(change);
-  if (change.kind === 'toggleTags') return renderToggleTagSummaryChange(change, tagColors);
-  if (change.kind === 'stackTags') return renderStackTagSummaryChange(change, tagColors);
+  if (change.kind === 'consumables')
+    return renderConsumableSummaryChange(change);
+  if (change.kind === 'toggleTags')
+    return renderToggleTagSummaryChange(change, tagColors);
+  if (change.kind === 'stackTags')
+    return renderStackTagSummaryChange(change, tagColors);
   return `${change.label}: ${change.before ?? '-'} → ${change.after ?? '-'}`;
 }
 
@@ -504,10 +531,14 @@ function renderHpSummaryChange(
 
   const lines: string[] = [];
   if (curDelta !== 0 || tempDelta !== 0) {
-    lines.push(`${hpChangeLabel(curDelta, tempDelta)}: ${formatHpWithDelta(after, curDelta, tempDelta)}`);
+    lines.push(
+      `${hpChangeLabel(curDelta, tempDelta)}: ${formatHpWithDelta(after, curDelta, tempDelta)}`,
+    );
   }
   if (maxDelta !== 0) {
-    lines.push(`${maxHpChangeLabel(maxDelta)}: ${after.max} ${formatSignedDeltaParen(maxDelta)}`);
+    lines.push(
+      `${maxHpChangeLabel(maxDelta)}: ${after.max} ${formatSignedDeltaParen(maxDelta)}`,
+    );
   }
   return lines.length ? lines : `체력: ${formatHpBase(after)}`;
 }
@@ -528,7 +559,8 @@ function renderDeathSaveSummaryChange(
 ): string {
   const before = parseDeathSaveSummary(change.before);
   const after = parseDeathSaveSummary(change.after);
-  if (!after) return `사망내성: ${change.before ?? '-'} → ${change.after ?? '-'}`;
+  if (!after)
+    return `사망내성: ${change.before ?? '-'} → ${change.after ?? '-'}`;
   const successDelta = before ? after.success - before.success : after.success;
   const failureDelta = before ? after.failure - before.failure : after.failure;
   const label = before ? '사망내성' : '사망 내성 표기 시작';
@@ -556,9 +588,9 @@ function renderConsumableSummaryChange(
 ): string {
   const before = parseNumberRecordSummary(change.before);
   const after = parseNumberRecordSummary(change.after);
-  const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort(
-    (a, b) => a.localeCompare(b, undefined, { numeric: true }),
-  );
+  const keys = [
+    ...new Set([...Object.keys(before), ...Object.keys(after)]),
+  ].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   const parts = keys
     .filter((key) => (before[key] ?? 0) !== (after[key] ?? 0))
     .map((key) => {
@@ -575,8 +607,12 @@ function renderToggleTagSummaryChange(
 ): string | null {
   const before = new Set(parseListSummary(change.before));
   const after = new Set(parseListSummary(change.after));
-  const gained = [...after].filter((tag) => !before.has(tag)).sort((a, b) => a.localeCompare(b));
-  const lost = [...before].filter((tag) => !after.has(tag)).sort((a, b) => a.localeCompare(b));
+  const gained = [...after]
+    .filter((tag) => !before.has(tag))
+    .sort((a, b) => a.localeCompare(b));
+  const lost = [...before]
+    .filter((tag) => !after.has(tag))
+    .sort((a, b) => a.localeCompare(b));
   const parts = [
     ...gained.map((tag) => `${colorTag(tag, tagColors)} 획득`),
     ...lost.map((tag) => `${colorTag(tag, tagColors)} 잃음`),
@@ -590,15 +626,18 @@ function renderStackTagSummaryChange(
 ): string | null {
   const before = parseStackTagSummary(change.before);
   const after = parseStackTagSummary(change.after);
-  const names = [...new Set([...Object.keys(before), ...Object.keys(after)])].sort((a, b) =>
-    a.localeCompare(b),
-  );
+  const names = [
+    ...new Set([...Object.keys(before), ...Object.keys(after)]),
+  ].sort((a, b) => a.localeCompare(b));
   const parts = names
     .filter((name) => (before[name] ?? 0) !== (after[name] ?? 0))
     .map((name) => {
       const value = after[name] ?? 0;
       const delta = value - (before[name] ?? 0);
-      const prefix = value > 0 ? `${colorTag(name, tagColors)} x${value}` : `${colorTag(name, tagColors)} 0`;
+      const prefix =
+        value > 0
+          ? `${colorTag(name, tagColors)} x${value}`
+          : `${colorTag(name, tagColors)} 0`;
       return `${prefix}${formatSignedDeltaParen(delta)}`;
     });
   return parts.length ? `스택 태그: ${parts.join(', ')}` : null;
@@ -622,7 +661,9 @@ function renderMarkerSummaryChange(
   return `${change.label}: ${change.before ?? '-'} → ${change.after ?? '-'}`;
 }
 
-function parseHpSummary(value?: string): { cur: number; max: number; temp: number } | null {
+function parseHpSummary(
+  value?: string,
+): { cur: number; max: number; temp: number } | null {
   const text = String(value ?? '');
   const match = text.match(/(\d+)\/(\d+)(?:\s*\(\+(\d+)\))?/);
   if (!match) return null;
@@ -653,7 +694,9 @@ function formatHpBase(hp: { cur: number; max: number; temp: number }) {
   return `${hp.cur}/${hp.max}${hp.temp > 0 ? colorNumber(`+${hp.temp}`, color(34)) : ''}`;
 }
 
-function parseDeathSaveSummary(value?: string): { success: number; failure: number } | null {
+function parseDeathSaveSummary(
+  value?: string,
+): { success: number; failure: number } | null {
   const text = String(value ?? '');
   const match = text.match(/(-?\d+)S\/(-?\d+)F/);
   if (!match) return null;
@@ -679,7 +722,13 @@ function parseNumberRecordSummary(value?: string): Record<string, number> {
 }
 
 function numericKeys(...records: Array<Record<string, number>>) {
-  return [...new Set(records.flatMap((record) => Object.keys(record).map((key) => Number(key))))]
+  return [
+    ...new Set(
+      records.flatMap((record) =>
+        Object.keys(record).map((key) => Number(key)),
+      ),
+    ),
+  ]
     .filter((level) => Number.isFinite(level) && level >= 1)
     .sort((a, b) => a - b);
 }
@@ -738,10 +787,7 @@ function unitSummaryColor(side?: string, colorCode?: number) {
   return color(90);
 }
 
-function renderUnitLine(
-  u: Unit,
-  tagColors?: Record<string, number>,
-): string {
+function renderUnitLine(u: Unit, tagColors?: Record<string, number>): string {
   const ds = fmtDeathSaves(u);
   const dsText = ds ? ` ${ds}` : '';
   const resourcesText = fmtResources(u);
@@ -758,7 +804,7 @@ function renderUnitLine(
   const hp = fmtHp(u);
   const ac = fmtAc(u);
   const displayName = formatUnitLabel(u, u.name);
-  let left = `${disabledPrefix}${unitColor(u)}${displayName} ${GRAY}- ${hp} / ${AC_COLOR}${ac}${RESET}`;
+  const left = `${disabledPrefix}${unitColor(u)}${displayName} ${GRAY}- ${hp} / ${AC_COLOR}${ac}${RESET}`;
   return left + resourcesText + dsText + tagsText;
 }
 
@@ -793,7 +839,11 @@ function renderTurnLine(state: EncounterState): string {
         );
         const key = `unit:${u.id}`;
         if (u?.turnDisabled)
-          return withTurnPriority(state, key, `${DISABLED_COLOR}${label}${color(38)}`);
+          return withTurnPriority(
+            state,
+            key,
+            `${DISABLED_COLOR}${label}${color(38)}`,
+          );
         return withTurnPriority(state, key, label);
       })
       .filter(Boolean);
@@ -823,7 +873,9 @@ function renderTurnLine(state: EncounterState): string {
       if (t.kind === 'marker') {
         const m = state.markers?.find((x) => x.id === t.markerId);
         const duration = Number(m?.duration ?? 0);
-        const hasDuration = m ? Number.isFinite(duration) && duration > 0 : true;
+        const hasDuration = m
+          ? Number.isFinite(duration) && duration > 0
+          : true;
         if (!hasDuration) return '';
         const label = m?.alias?.trim?.() || m?.name || t.markerId;
         return `${DISABLED_COLOR}[${label}]${color(38)}`;
@@ -841,16 +893,19 @@ function renderTurnLine(state: EncounterState): string {
       if ((u as any)?.bench) return '';
       if (normalizeUnitType(u) !== 'NORMAL') return '';
       const label = formatUnitLabel(
-          u,
-          u?.alias?.trim?.() || u?.name || t.unitId,
-        );
+        u,
+        u?.alias?.trim?.() || u?.name || t.unitId,
+      );
       const key = `unit:${u.id}`;
       if (u?.turnDisabled)
-        return withTurnPriority(state, key, `${DISABLED_COLOR}${label}${color(38)}`);
+        return withTurnPriority(
+          state,
+          key,
+          `${DISABLED_COLOR}${label}${color(38)}`,
+        );
       return withTurnPriority(state, key, isActive ? highlight(label) : label);
     })
     .filter(Boolean);
 
   return parts.join(' - ');
 }
-

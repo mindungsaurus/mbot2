@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import type {
   CreateTagPresetDto,
@@ -90,7 +94,8 @@ export class TagPresetsService {
     });
     if (!folder) throw new NotFoundException('folder not found');
 
-    const data: { name?: string; order?: number; parentId?: string | null } = {};
+    const data: { name?: string; order?: number; parentId?: string | null } =
+      {};
     if (body?.name !== undefined) {
       data.name = normalizeName(body?.name, DEFAULT_FOLDER_NAME);
     }
@@ -135,7 +140,8 @@ export class TagPresetsService {
     const folderId = body?.folderId ?? null;
     const order = normalizeOrder(body?.order);
     const colorCode = normalizeColorCode(body?.colorCode);
-    const decOnTurnStart = kind === 'stack' && normalizeBool(body?.decOnTurnStart);
+    const decOnTurnStart =
+      kind === 'stack' && normalizeBool(body?.decOnTurnStart);
     const decOnTurnEnd = kind === 'stack' && normalizeBool(body?.decOnTurnEnd);
     const decByCaster = kind === 'stack' && normalizeBool(body?.decByCaster);
 
@@ -185,7 +191,9 @@ export class TagPresetsService {
     }
 
     const nextKind =
-      body?.kind !== undefined ? normalizeKind(body.kind) : normalizeKind(preset.kind);
+      body?.kind !== undefined
+        ? normalizeKind(body.kind)
+        : normalizeKind(preset.kind);
     const nextDecStart =
       body?.decOnTurnStart !== undefined
         ? normalizeBool(body.decOnTurnStart)
@@ -212,7 +220,10 @@ export class TagPresetsService {
         decOnTurnStart: nextKind === 'stack' ? nextDecStart : false,
         decOnTurnEnd: nextKind === 'stack' ? nextDecEnd : false,
         decByCaster: nextKind === 'stack' ? nextDecByCaster : false,
-        colorCode: body?.colorCode !== undefined ? normalizeColorCode(body.colorCode) : preset.colorCode,
+        colorCode:
+          body?.colorCode !== undefined
+            ? normalizeColorCode(body.colorCode)
+            : preset.colorCode,
       },
     });
   }

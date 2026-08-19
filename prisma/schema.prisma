@@ -14,22 +14,115 @@ datasource db {
 }
 
 model CharacterGold {
-  id           Int     @id @default(autoincrement())
-  name         String  @unique
+  id           Int                  @id @default(autoincrement())
+  name         String               @unique
   gold         Int
   dailyExpense Int
   isNpc        Boolean
   friend       String?
   day          Int?
+  sheet        CharacterSheet?
+  equipment    CharacterEquipment[]
+  features     CharacterFeature[]
+}
+
+enum CasterProgression {
+  NONE
+  FULL
+  HALF
+  THIRD
+}
+
+enum CharacterClassFeatureTarget {
+  TRAIT
+  FEAT
+  TECHNIQUE
+  SPELL
+  METAMAGIC
+  FIGHTING_STYLE
+  RESOURCE_OR_SLOT
+  CUSTOM
+}
+
+enum CharacterClassAdditionalRewardType {
+  TRAIT
+  FEAT
+  TECHNIQUE
+  SPELL
+  GRANT_FEATURE
+  GRANT_CHOICE_OPTION
+  GRANT_UNACQUIRED_CHOICE_OPTIONS
+}
+
+enum CharacterFeatureVisibilityOverride {
+  DEFAULT
+  FORCE_SHOW
+  FORCE_HIDE
+}
+
+enum PersonType {
+  PC
+  NPC
+}
+
+enum AffinityValueType {
+  NUMBER
+  TEXT
+}
+
+enum DiscordLogSourceType {
+  PERSONAL
+  JOINT
+  GENERAL
+}
+
+enum CampaignParticipantRole {
+  OPERATOR
+  PLAYER
+  BOTH
+  OTHER
+}
+
+enum ActorRuleResultType {
+  TRACKED_PERSON
+  GENERIC_NPC
+  SYSTEM
+  IGNORE
+}
+
+enum CollectionCoverageStatus {
+  COMPLETE
+  PARTIAL
+  UNKNOWN
+}
+
+enum ArchiveConfidenceStatus {
+  COMPLETE
+  PARTIAL
+  UNKNOWN
+}
+
+enum DiscordCollectionMode {
+  RANGE
+  INCREMENTAL
+}
+
+enum DiscordCollectionStatus {
+  RUNNING
+  SUCCEEDED
+  PARTIAL
+  FAILED
 }
 
 model ItemsInfo {
-  id      Int    @id @default(autoincrement())
-  name    String @unique
-  quality Int
-  unit    String
-  type    String
-  noSpace String @unique
+  id               Int                   @id @default(autoincrement())
+  name             String                @unique
+  quality          Int
+  unit             String
+  type             String
+  noSpace          String                @unique
+  equipmentProfile ItemEquipmentProfile?
+  equippedEntries  CharacterEquipment[]
 }
 
 model Inventory {
@@ -47,20 +140,643 @@ model ItemAlias {
   itemName String
 }
 
+model CharacterSheet {
+  id               String                     @id @default(cuid())
+  characterName    String                     @unique
+  race             String?
+  age              String?
+  height           String?
+  weight           String?
+  hpCur            Int?
+  hpMax            Int?
+  ac               Int?
+  strength         Int?
+  dexterity        Int?
+  constitution     Int?
+  intelligence     Int?
+  wisdom           Int?
+  charisma         Int?
+  proficiencies    Json?
+  spellSlots       Json?
+  metamagic        Json?
+  spellVariants    Json?
+  spells           Json?
+  notes            Json?
+  createdAt        DateTime                   @default(now())
+  updatedAt        DateTime                   @updatedAt
+  character        CharacterGold              @relation(fields: [characterName], references: [name], onDelete: Cascade)
+  classes          CharacterClass[]
+  featureOverrides CharacterFeatureOverride[]
+
+  @@index([characterName])
+}
+
+model CharacterClassDefinition {
+  id                  String                            @id @default(cuid())
+  name                String                            @unique
+  subclassChoiceLevel Int?
+  casterProgression   CasterProgression                 @default(NONE)
+  createdAt           DateTime                          @default(now())
+  updatedAt           DateTime                          @updatedAt
+  subclasses          CharacterSubclassDefinition[]
+  characterClasses    CharacterClass[]
+  features            CharacterClassFeatureDefinition[]
+  choiceGroups        CharacterClassChoiceGroup[]
+  branchGroups        ProgressionBranchGroup[]
+
+  @@index([name])
+}
+
+model CharacterSubclassDefinition {
+  id                String                            @id @default(cuid())
+  classDefinitionId String
+  name              String
+  createdAt         DateTime                          @default(now())
+  updatedAt         DateTime                          @updatedAt
+  classDefinition   CharacterClassDefinition          @relation(fields: [classDefinitionId], references: [id], onDelete: Restrict)
+  characterClasses  CharacterClass[]
+  features          CharacterClassFeatureDefinition[]
+  choiceGroups      CharacterClassChoiceGroup[]
+  branchGroups      ProgressionBranchGroup[]
+
+  @@unique([classDefinitionId, name])
+  @@index([classDefinitionId])
+}
+
+model CharacterClassFeatureDefinition {
+  id                   String                           @id @default(cuid())
+  classDefinitionId    String?
+  subclassDefinitionId String?
+  branchOptionId       String?
+  skillEntryId         Int?
+  spellEntryId         Int?
+  level                Int
+  name                 String?
+  description          String?
+  target               CharacterClassFeatureTarget
+  order                Int                              @default(0)
+  defaultSheetVisible  Boolean                          @default(true)
+  createdAt            DateTime                         @default(now())
+  updatedAt            DateTime                         @updatedAt
+  classDefinition      CharacterClassDefinition?        @relation(fields: [classDefinitionId], references: [id], onDelete: Cascade)
+  subclassDefinition   CharacterSubclassDefinition?     @relation(fields: [subclassDefinitionId], references: [id], onDelete: Cascade)
+  branchOption         ProgressionBranchOption?         @relation(fields: [branchOptionId], references: [id], onDelete: SetNull)
+  skillEntry           SkillEntry?                      @relation(fields: [skillEntryId], references: [id], onDelete: Restrict)
+  spellEntry           SpellEntry?                      @relation(fields: [spellEntryId], references: [id], onDelete: Restrict)
+  additionalRewards    CharacterClassAdditionalReward[] @relation("FeatureAdditionalRewards")
+  referencedByRewards  CharacterClassAdditionalReward[] @relation("ReferencedFeatureRewards")
+  upgrades             CharacterClassFeatureUpgrade[]   @relation("FeatureDefinitionUpgrades")
+  characterOverrides   CharacterFeatureOverride[]       @relation("FeatureDefinitionOverrides")
+
+  @@index([classDefinitionId, level, order])
+  @@index([subclassDefinitionId, level, order])
+  @@index([branchOptionId])
+  @@index([skillEntryId])
+  @@index([spellEntryId])
+}
+
+model CharacterClassChoiceGroup {
+  id                   String                           @id @default(cuid())
+  classDefinitionId    String?
+  subclassDefinitionId String?
+  branchOptionId       String?
+  level                Int
+  name                 String
+  description          String?
+  selectionCount       Int
+  order                Int                              @default(0)
+  createdAt            DateTime                         @default(now())
+  updatedAt            DateTime                         @updatedAt
+  classDefinition      CharacterClassDefinition?        @relation(fields: [classDefinitionId], references: [id], onDelete: Cascade)
+  subclassDefinition   CharacterSubclassDefinition?     @relation(fields: [subclassDefinitionId], references: [id], onDelete: Cascade)
+  branchOption         ProgressionBranchOption?         @relation(fields: [branchOptionId], references: [id], onDelete: SetNull)
+  options              CharacterClassChoiceOption[]
+  selections           CharacterClassChoiceSelection[]
+  referencedByRewards  CharacterClassAdditionalReward[] @relation("ReferencedChoiceGroupRewards")
+
+  @@index([classDefinitionId, level, order])
+  @@index([subclassDefinitionId, level, order])
+  @@index([branchOptionId])
+}
+
+model CharacterClassChoiceOption {
+  id                  String                           @id @default(cuid())
+  choiceGroupId       String
+  skillEntryId        Int?
+  spellEntryId        Int?
+  name                String?
+  description         String?
+  target              CharacterClassFeatureTarget
+  order               Int                              @default(0)
+  defaultSheetVisible Boolean                          @default(true)
+  createdAt           DateTime                         @default(now())
+  updatedAt           DateTime                         @updatedAt
+  choiceGroup         CharacterClassChoiceGroup        @relation(fields: [choiceGroupId], references: [id], onDelete: Cascade)
+  skillEntry          SkillEntry?                      @relation(fields: [skillEntryId], references: [id], onDelete: Restrict)
+  spellEntry          SpellEntry?                      @relation(fields: [spellEntryId], references: [id], onDelete: Restrict)
+  selections          CharacterClassChoiceSelection[]
+  additionalRewards   CharacterClassAdditionalReward[] @relation("ChoiceOptionAdditionalRewards")
+  referencedByRewards CharacterClassAdditionalReward[] @relation("ReferencedChoiceOptionRewards")
+  upgrades            CharacterClassFeatureUpgrade[]   @relation("ChoiceOptionUpgrades")
+  characterOverrides  CharacterFeatureOverride[]       @relation("ChoiceOptionOverrides")
+
+  @@index([choiceGroupId, order])
+  @@index([skillEntryId])
+  @@index([spellEntryId])
+}
+
+model CharacterClassChoiceSelection {
+  id               String                     @id @default(cuid())
+  characterClassId String
+  choiceGroupId    String
+  choiceOptionId   String
+  createdAt        DateTime                   @default(now())
+  updatedAt        DateTime                   @updatedAt
+  characterClass   CharacterClass             @relation(fields: [characterClassId], references: [id], onDelete: Cascade)
+  choiceGroup      CharacterClassChoiceGroup  @relation(fields: [choiceGroupId], references: [id], onDelete: Cascade)
+  choiceOption     CharacterClassChoiceOption @relation(fields: [choiceOptionId], references: [id], onDelete: Cascade)
+
+  @@unique([characterClassId, choiceOptionId])
+  @@unique([characterClassId, choiceGroupId, choiceOptionId])
+  @@index([characterClassId, choiceGroupId])
+  @@index([choiceGroupId])
+  @@index([choiceOptionId])
+}
+
+model CharacterClassAdditionalReward {
+  id                            String                             @id @default(cuid())
+  featureDefinitionId           String?
+  choiceOptionId                String?
+  rewardType                    CharacterClassAdditionalRewardType
+  name                          String?
+  description                   String?
+  skillEntryId                  Int?
+  spellEntryId                  Int?
+  referencedFeatureDefinitionId String?
+  referencedChoiceOptionId      String?
+  referencedChoiceGroupId       String?
+  order                         Int                                @default(0)
+  createdAt                     DateTime                           @default(now())
+  updatedAt                     DateTime                           @updatedAt
+  featureDefinition             CharacterClassFeatureDefinition?   @relation("FeatureAdditionalRewards", fields: [featureDefinitionId], references: [id], onDelete: Cascade)
+  choiceOption                  CharacterClassChoiceOption?        @relation("ChoiceOptionAdditionalRewards", fields: [choiceOptionId], references: [id], onDelete: Cascade)
+  skillEntry                    SkillEntry?                        @relation("AdditionalRewardSkill", fields: [skillEntryId], references: [id], onDelete: Restrict)
+  spellEntry                    SpellEntry?                        @relation("AdditionalRewardSpell", fields: [spellEntryId], references: [id], onDelete: Restrict)
+  referencedFeatureDefinition   CharacterClassFeatureDefinition?   @relation("ReferencedFeatureRewards", fields: [referencedFeatureDefinitionId], references: [id], onDelete: Restrict)
+  referencedChoiceOption        CharacterClassChoiceOption?        @relation("ReferencedChoiceOptionRewards", fields: [referencedChoiceOptionId], references: [id], onDelete: Restrict)
+  referencedChoiceGroup         CharacterClassChoiceGroup?         @relation("ReferencedChoiceGroupRewards", fields: [referencedChoiceGroupId], references: [id], onDelete: Restrict)
+
+  @@index([featureDefinitionId, order])
+  @@index([choiceOptionId, order])
+  @@index([skillEntryId])
+  @@index([spellEntryId])
+  @@index([referencedFeatureDefinitionId])
+  @@index([referencedChoiceOptionId])
+  @@index([referencedChoiceGroupId])
+}
+
+model CharacterClassFeatureUpgrade {
+  id                        String                           @id @default(cuid())
+  targetFeatureDefinitionId String?
+  targetChoiceOptionId      String?
+  branchOptionId            String?
+  unlockLevel               Int
+  name                      String?
+  description               String
+  displayOrder              Int                              @default(0)
+  createdAt                 DateTime                         @default(now())
+  updatedAt                 DateTime                         @updatedAt
+  targetFeatureDefinition   CharacterClassFeatureDefinition? @relation("FeatureDefinitionUpgrades", fields: [targetFeatureDefinitionId], references: [id], onDelete: Cascade)
+  targetChoiceOption        CharacterClassChoiceOption?      @relation("ChoiceOptionUpgrades", fields: [targetChoiceOptionId], references: [id], onDelete: Cascade)
+  branchOption              ProgressionBranchOption?         @relation(fields: [branchOptionId], references: [id], onDelete: SetNull)
+
+  @@index([targetFeatureDefinitionId, unlockLevel, displayOrder])
+  @@index([targetChoiceOptionId, unlockLevel, displayOrder])
+  @@index([branchOptionId])
+}
+
+model CharacterFeatureOverride {
+  id                        String                             @id @default(cuid())
+  characterSheetId          String
+  targetFeatureDefinitionId String?
+  targetChoiceOptionId      String?
+  visibility                CharacterFeatureVisibilityOverride @default(DEFAULT)
+  suppressed                Boolean                            @default(false)
+  note                      String?
+  createdAt                 DateTime                           @default(now())
+  updatedAt                 DateTime                           @updatedAt
+  characterSheet            CharacterSheet                     @relation(fields: [characterSheetId], references: [characterName], onDelete: Cascade)
+  targetFeatureDefinition   CharacterClassFeatureDefinition?   @relation("FeatureDefinitionOverrides", fields: [targetFeatureDefinitionId], references: [id], onDelete: Cascade)
+  targetChoiceOption        CharacterClassChoiceOption?        @relation("ChoiceOptionOverrides", fields: [targetChoiceOptionId], references: [id], onDelete: Cascade)
+
+  @@index([characterSheetId])
+  @@index([targetFeatureDefinitionId])
+  @@index([targetChoiceOptionId])
+}
+
+model ProgressionBranchGroup {
+  id                   String                          @id @default(cuid())
+  classDefinitionId    String?
+  subclassDefinitionId String?
+  name                 String
+  description          String?
+  unlockLevel          Int
+  displayOrder         Int                             @default(0)
+  createdAt            DateTime                        @default(now())
+  updatedAt            DateTime                        @updatedAt
+  classDefinition      CharacterClassDefinition?       @relation(fields: [classDefinitionId], references: [id], onDelete: Cascade)
+  subclassDefinition   CharacterSubclassDefinition?    @relation(fields: [subclassDefinitionId], references: [id], onDelete: Cascade)
+  options              ProgressionBranchOption[]
+  selections           CharacterClassBranchSelection[]
+
+  @@index([classDefinitionId, unlockLevel, displayOrder])
+  @@index([subclassDefinitionId, unlockLevel, displayOrder])
+}
+
+model ProgressionBranchOption {
+  id              String                            @id @default(cuid())
+  branchGroupId   String
+  name            String
+  description     String?
+  displayOrder    Int                               @default(0)
+  createdAt       DateTime                          @default(now())
+  updatedAt       DateTime                          @updatedAt
+  branchGroup     ProgressionBranchGroup            @relation(fields: [branchGroupId], references: [id], onDelete: Cascade)
+  classFeatures   CharacterClassFeatureDefinition[]
+  choiceGroups    CharacterClassChoiceGroup[]
+  selections      CharacterClassBranchSelection[]
+  featureUpgrades CharacterClassFeatureUpgrade[]
+
+  @@index([branchGroupId, displayOrder])
+}
+
+model CharacterClassBranchSelection {
+  id               String                  @id @default(cuid())
+  characterClassId String
+  branchGroupId    String
+  branchOptionId   String
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+  characterClass   CharacterClass          @relation(fields: [characterClassId], references: [id], onDelete: Cascade)
+  branchGroup      ProgressionBranchGroup  @relation(fields: [branchGroupId], references: [id], onDelete: Cascade)
+  branchOption     ProgressionBranchOption @relation(fields: [branchOptionId], references: [id], onDelete: Cascade)
+
+  @@unique([characterClassId, branchGroupId])
+  @@index([branchGroupId])
+  @@index([branchOptionId])
+}
+
+model CharacterClass {
+  id                   String                          @id @default(cuid())
+  characterSheetId     String
+  classDefinitionId    String
+  subclassDefinitionId String?
+  level                Int
+  createdAt            DateTime                        @default(now())
+  updatedAt            DateTime                        @updatedAt
+  characterSheet       CharacterSheet                  @relation(fields: [characterSheetId], references: [id], onDelete: Cascade)
+  classDefinition      CharacterClassDefinition        @relation(fields: [classDefinitionId], references: [id], onDelete: Restrict)
+  subclassDefinition   CharacterSubclassDefinition?    @relation(fields: [subclassDefinitionId], references: [id], onDelete: SetNull)
+  choiceSelections     CharacterClassChoiceSelection[]
+  branchSelections     CharacterClassBranchSelection[]
+
+  @@unique([characterSheetId, classDefinitionId])
+  @@index([classDefinitionId])
+  @@index([subclassDefinitionId])
+}
+
+model ItemEquipmentProfile {
+  id            String                       @id @default(cuid())
+  itemName      String                       @unique
+  allowedSlots  Json
+  occupiesSlots Json
+  flavorText    String?
+  metadata      String?
+  notes         String?
+  createdAt     DateTime                     @default(now())
+  updatedAt     DateTime                     @updatedAt
+  item          ItemsInfo                    @relation(fields: [itemName], references: [name], onDelete: Cascade)
+  effects       ItemEquipmentProfileEffect[]
+
+  @@index([itemName])
+}
+
+model ItemEquipmentProfileEffect {
+  id          String               @id @default(cuid())
+  profileId   String
+  name        String
+  description String
+  order       Int                  @default(0)
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+  profile     ItemEquipmentProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId, order])
+}
+
+model CharacterEquipment {
+  id            String        @id @default(cuid())
+  characterName String
+  itemName      String
+  slots         Json
+  equipGroupId  String
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  character     CharacterGold @relation(fields: [characterName], references: [name], onDelete: Cascade)
+  item          ItemsInfo     @relation(fields: [itemName], references: [name], onDelete: Restrict)
+
+  @@index([characterName])
+  @@index([itemName])
+}
+
+model CharacterFeature {
+  id            String        @id @default(cuid())
+  characterName String
+  kind          String
+  name          String
+  description   String
+  order         Int           @default(0)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  character     CharacterGold @relation(fields: [characterName], references: [name], onDelete: Cascade)
+
+  @@index([characterName, kind, order])
+}
+
+model Campaign {
+  id               String                 @id @default(cuid())
+  name             String                 @unique
+  isActive         Boolean                @default(true)
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+  persons          Person[]
+  participants     CampaignParticipant[]
+  logSources       DiscordLogSource[]
+  actorRules       ActorRule[]
+  storyTimeAnchors StoryTimeAnchor[]
+  collectionRuns   DiscordCollectionRun[]
+}
+
+model Person {
+  id                   String                @id @default(cuid())
+  campaignId           String
+  name                 String
+  type                 PersonType
+  title                String?
+  shortDescription     String?
+  isActive             Boolean               @default(true)
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  campaign             Campaign              @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  aliases              PersonAlias[]
+  sourceAffinities     Affinity[]            @relation("AffinitySourcePerson")
+  targetAffinities     Affinity[]            @relation("AffinityTargetPerson")
+  defaultLogSources    DiscordLogSource[]    @relation("DefaultLogSourcePc")
+  campaignParticipants CampaignParticipant[]
+  actorRules           ActorRule[]
+
+  @@unique([campaignId, name])
+  @@index([campaignId, type, isActive])
+  @@index([name])
+}
+
+model PersonAlias {
+  id              String            @id @default(cuid())
+  personId        String
+  alias           String
+  normalizedAlias String
+  logSourceId     String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  person          Person            @relation(fields: [personId], references: [id], onDelete: Restrict)
+  logSource       DiscordLogSource? @relation(fields: [logSourceId], references: [id], onDelete: Restrict)
+
+  @@index([personId])
+  @@index([normalizedAlias])
+  @@index([logSourceId, normalizedAlias])
+}
+
+model Affinity {
+  id             String            @id @default(cuid())
+  sourcePersonId String
+  targetPersonId String
+  valueType      AffinityValueType
+  numericValue   Int?
+  textValue      String?
+  comment        String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  sourcePerson   Person            @relation("AffinitySourcePerson", fields: [sourcePersonId], references: [id], onDelete: Restrict)
+  targetPerson   Person            @relation("AffinityTargetPerson", fields: [targetPersonId], references: [id], onDelete: Restrict)
+
+  @@unique([sourcePersonId, targetPersonId])
+  @@index([sourcePersonId])
+  @@index([targetPersonId])
+}
+
+model DiscordLogSource {
+  id                          String                 @id @default(cuid())
+  campaignId                  String
+  guildId                     String
+  channelId                   String
+  displayName                 String
+  sourceType                  DiscordLogSourceType
+  defaultPcId                 String?
+  enabled                     Boolean                @default(true)
+  activeFrom                  DateTime?
+  activeTo                    DateTime?
+  incrementalCursorMessageId  String?
+  incrementalScannedThroughAt DateTime?
+  operatorNote                String?
+  createdAt                   DateTime               @default(now())
+  updatedAt                   DateTime               @updatedAt
+  campaign                    Campaign               @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  defaultPc                   Person?                @relation("DefaultLogSourcePc", fields: [defaultPcId], references: [id], onDelete: SetNull)
+  aliases                     PersonAlias[]
+  actorRules                  ActorRule[]
+  messages                    DiscordMessage[]
+  coverages                   LogSourceCoverage[]
+  storyTimeAnchors            StoryTimeAnchor[]
+  collectionRuns              DiscordCollectionRun[]
+
+  @@unique([guildId, channelId])
+  @@index([campaignId, enabled])
+  @@index([defaultPcId])
+  @@index([incrementalCursorMessageId])
+}
+
+model CampaignParticipant {
+  id                 String                  @id @default(cuid())
+  campaignId         String
+  discordUserId      String
+  discordDisplayName String?
+  role               CampaignParticipantRole
+  linkedPersonId     String?
+  webUserId          String?
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+  campaign           Campaign                @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  linkedPerson       Person?                 @relation(fields: [linkedPersonId], references: [id], onDelete: SetNull)
+  webUser            User?                   @relation(fields: [webUserId], references: [id], onDelete: SetNull)
+
+  @@unique([campaignId, discordUserId])
+  @@index([linkedPersonId])
+  @@index([webUserId])
+}
+
+model ActorRule {
+  id                String              @id @default(cuid())
+  campaignId        String
+  pattern           String
+  normalizedPattern String
+  resultType        ActorRuleResultType
+  personId          String?
+  logSourceId       String?
+  enabled           Boolean             @default(true)
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  campaign          Campaign            @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  person            Person?             @relation(fields: [personId], references: [id], onDelete: Restrict)
+  logSource         DiscordLogSource?   @relation(fields: [logSourceId], references: [id], onDelete: Restrict)
+
+  @@index([campaignId, enabled])
+  @@index([normalizedPattern])
+  @@index([logSourceId, normalizedPattern])
+  @@index([personId])
+}
+
+model DiscordMessage {
+  id                  String                     @id @default(cuid())
+  discordMessageId    String                     @unique
+  logSourceId         String
+  guildId             String
+  channelId           String
+  authorDiscordUserId String?
+  authorDisplayName   String
+  content             String
+  timestamp           DateTime
+  isBot               Boolean                    @default(false)
+  webhookId           String?
+  replyToMessageId    String?
+  discordEditedAt     DateTime?
+  lastSyncedAt        DateTime?
+  messageType         Int?
+  embedsJson          Json?
+  isDeleted           Boolean                    @default(false)
+  deletedAt           DateTime?
+  createdAt           DateTime                   @default(now())
+  updatedAt           DateTime                   @updatedAt
+  logSource           DiscordLogSource           @relation(fields: [logSourceId], references: [id], onDelete: Restrict)
+  attachments         DiscordMessageAttachment[]
+
+  @@index([logSourceId, timestamp])
+  @@index([guildId, channelId, timestamp])
+  @@index([authorDiscordUserId])
+  @@index([replyToMessageId])
+}
+
+model DiscordMessageAttachment {
+  id                  String         @id @default(cuid())
+  messageId           String
+  discordAttachmentId String
+  filename            String
+  url                 String
+  contentType         String?
+  size                Int?
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+  message             DiscordMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, discordAttachmentId])
+  @@index([messageId])
+}
+
+model LogSourceCoverage {
+  id                      String                   @id @default(cuid())
+  logSourceId             String
+  startAt                 DateTime
+  endAt                   DateTime
+  collectionStatus        CollectionCoverageStatus @default(UNKNOWN)
+  archiveConfidenceStatus ArchiveConfidenceStatus  @default(UNKNOWN)
+  note                    String?
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @updatedAt
+  logSource               DiscordLogSource         @relation(fields: [logSourceId], references: [id], onDelete: Restrict)
+
+  @@index([logSourceId, startAt, endAt])
+  @@index([collectionStatus])
+  @@index([archiveConfidenceStatus])
+}
+
+model DiscordCollectionRun {
+  id                  String                  @id @default(cuid())
+  campaignId          String
+  logSourceId         String
+  mode                DiscordCollectionMode
+  status              DiscordCollectionStatus
+  requestedStartAt    DateTime?
+  requestedEndAt      DateTime?
+  resolvedStartAt     DateTime
+  resolvedEndAt       DateTime
+  fetchedCount        Int                     @default(0)
+  newCount            Int                     @default(0)
+  updatedCount        Int                     @default(0)
+  unchangedCount      Int                     @default(0)
+  attachmentCount     Int                     @default(0)
+  firstMessageAt      DateTime?
+  lastMessageAt       DateTime?
+  lastCursorMessageId String?
+  errorMessage        String?
+  requestedByUserId   String?
+  startedAt           DateTime                @default(now())
+  finishedAt          DateTime?
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+  campaign            Campaign                @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  logSource           DiscordLogSource        @relation(fields: [logSourceId], references: [id], onDelete: Restrict)
+  requestedByUser     User?                   @relation(fields: [requestedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([campaignId, startedAt])
+  @@index([logSourceId, startedAt])
+  @@index([status])
+  @@index([requestedByUserId])
+}
+
+model StoryTimeAnchor {
+  id             String           @id @default(cuid())
+  campaignId     String
+  logSourceId    String
+  sourceStartAt  DateTime
+  sourceEndAt    DateTime
+  storyDay       Int?
+  storyTimeLabel String?
+  note           String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  campaign       Campaign         @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  logSource      DiscordLogSource @relation(fields: [logSourceId], references: [id], onDelete: Restrict)
+
+  @@index([campaignId, sourceStartAt])
+  @@index([logSourceId, sourceStartAt, sourceEndAt])
+  @@index([storyDay])
+}
+
 model User {
-  id           String        @id @default(cuid())
-  username     String        @unique
-  passwordHash String
-  passwordSalt String
-  isAdmin      Boolean       @default(false)
-  createdAt    DateTime      @default(now())
-  sessions     UserSession[]
-  encounters   Encounter[]
-  unitPresetFolders UnitPresetFolder[]
-  unitPresets        UnitPreset[]
-  tagPresetFolders  TagPresetFolder[]
-  tagPresets         TagPreset[]
-  worldMaps          WorldMap[]
+  id                    String                 @id @default(cuid())
+  username              String                 @unique
+  passwordHash          String
+  passwordSalt          String
+  isAdmin               Boolean                @default(false)
+  createdAt             DateTime               @default(now())
+  sessions              UserSession[]
+  encounters            Encounter[]
+  unitPresetFolders     UnitPresetFolder[]
+  unitPresets           UnitPreset[]
+  tagPresetFolders      TagPresetFolder[]
+  tagPresets            TagPreset[]
+  worldMaps             WorldMap[]
+  campaignParticipants  CampaignParticipant[]
+  discordCollectionRuns DiscordCollectionRun[]
 }
 
 model UserSession {
@@ -94,15 +810,15 @@ model EncounterUndo {
 }
 
 model UnitPresetFolder {
-  id        String   @id @default(cuid())
+  id        String             @id @default(cuid())
   ownerId   String
   name      String
-  order     Int      @default(0)
+  order     Int                @default(0)
   parentId  String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  owner     User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  parent    UnitPresetFolder? @relation("UnitPresetFolderTree", fields: [parentId], references: [id], onDelete: SetNull)
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+  owner     User               @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  parent    UnitPresetFolder?  @relation("UnitPresetFolderTree", fields: [parentId], references: [id], onDelete: SetNull)
   children  UnitPresetFolder[] @relation("UnitPresetFolderTree")
   presets   UnitPreset[]
 
@@ -111,15 +827,15 @@ model UnitPresetFolder {
 }
 
 model UnitPreset {
-  id        String   @id @default(cuid())
+  id        String            @id @default(cuid())
   ownerId   String
   folderId  String?
   name      String
-  order     Int      @default(0)
+  order     Int               @default(0)
   data      Json
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  owner     User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+  owner     User              @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   folder    UnitPresetFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
 
   @@index([ownerId])
@@ -127,19 +843,19 @@ model UnitPreset {
 }
 
 model TagPreset {
-  id             String   @id @default(cuid())
+  id             String           @id @default(cuid())
   ownerId        String
   folderId       String?
   name           String
-  order          Int      @default(0)
+  order          Int              @default(0)
   kind           String
-  decOnTurnStart Boolean  @default(false)
-  decOnTurnEnd   Boolean  @default(false)
-  decByCaster    Boolean  @default(false)
+  decOnTurnStart Boolean          @default(false)
+  decOnTurnEnd   Boolean          @default(false)
+  decByCaster    Boolean          @default(false)
   colorCode      Int?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  owner          User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  owner          User             @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   folder         TagPresetFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
 
   @@index([ownerId])
@@ -147,15 +863,15 @@ model TagPreset {
 }
 
 model TagPresetFolder {
-  id        String   @id @default(cuid())
+  id        String            @id @default(cuid())
   ownerId   String
   name      String
-  order     Int      @default(0)
+  order     Int               @default(0)
   parentId  String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  owner     User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  parent    TagPresetFolder? @relation("TagPresetFolderTree", fields: [parentId], references: [id], onDelete: SetNull)
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+  owner     User              @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  parent    TagPresetFolder?  @relation("TagPresetFolderTree", fields: [parentId], references: [id], onDelete: SetNull)
   children  TagPresetFolder[] @relation("TagPresetFolderTree")
   presets   TagPreset[]
 
@@ -164,67 +880,73 @@ model TagPresetFolder {
 }
 
 model SpellEntry {
-  id               Int      @id @default(autoincrement())
-  spellKey         String   @unique
-  sourceMessageId  String   @unique
-  sourceMessageUrl String
-  sourceChannelId  String
+  id                Int     @id @default(autoincrement())
+  spellKey          String  @unique
+  sourceMessageId   String  @unique
+  sourceMessageUrl  String
+  sourceChannelId   String
   sourceChannelName String
-  sourceThreadId   String?
-  sourceThreadName String?
+  sourceThreadId    String?
+  sourceThreadName  String?
 
-  spellLevel       String
-  spellNumber      Int?
-  spellName        String
-  titleRaw         String
-  normalizedName   String
+  spellLevel     String
+  spellNumber    Int?
+  spellName      String
+  titleRaw       String
+  normalizedName String
 
-  school           String?
-  rangeText        String?
-  damage           String?
-  learnText        String?
-  checkText        String?
-  concentration    String?
-  duration         String?
-  castCost         String?
-  etcText          String?
-  commentText      String?
-  componentsText   String?
+  school         String?
+  rangeText      String?
+  damage         String?
+  learnText      String?
+  checkText      String?
+  concentration  String?
+  duration       String?
+  castCost       String?
+  etcText        String?
+  commentText    String?
+  componentsText String?
 
-  bodyRaw          String
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  bodyRaw           String
+  createdAt         DateTime                          @default(now())
+  updatedAt         DateTime                          @updatedAt
+  classFeatures     CharacterClassFeatureDefinition[]
+  choiceOptions     CharacterClassChoiceOption[]
+  additionalRewards CharacterClassAdditionalReward[]  @relation("AdditionalRewardSpell")
 
   @@index([normalizedName])
   @@index([spellLevel])
 }
 
 model SkillEntry {
-  id               Int      @id @default(autoincrement())
-  skillKey         String   @unique
-  sourceMessageId  String   @unique
-  sourceMessageUrl String
-  sourceChannelId  String
+  id                Int     @id @default(autoincrement())
+  skillKey          String  @unique
+  sourceMessageId   String  @unique
+  sourceMessageUrl  String
+  sourceChannelId   String
   sourceChannelName String
-  sourceThreadId   String?
-  sourceThreadName String?
+  sourceThreadId    String?
+  sourceThreadName  String?
 
-  jobName          String
-  skillName        String
-  conditionText    String?
-  titleRaw         String
-  normalizedName   String
-  bodyRaw          String
+  jobName        String
+  skillName      String
+  conditionText  String?
+  titleRaw       String
+  normalizedName String
+  bodyRaw        String
 
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  createdAt         DateTime                          @default(now())
+  updatedAt         DateTime                          @updatedAt
+  classFeatures     CharacterClassFeatureDefinition[]
+  choiceOptions     CharacterClassChoiceOption[]
+  additionalRewards CharacterClassAdditionalReward[]  @relation("AdditionalRewardSkill")
 
   @@index([normalizedName])
   @@index([jobName])
 }
 
 model WorldMap {
-  id                   String   @id @default(uuid())
+  id                   String                     @id @default(uuid())
   ownerId              String
   name                 String
   imageUrl             String?
@@ -242,9 +964,9 @@ model WorldMap {
   tileRegionStates     Json?
   tileMemos            Json?
   buildingPresets      Json?
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
-  owner                User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt            DateTime                   @default(now())
+  updatedAt            DateTime                   @updatedAt
+  owner                User                       @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   buildingPresetRows   WorldMapBuildingPreset[]
   buildingInstances    WorldMapBuildingInstance[]
   tickLogs             WorldMapTickLog[]
@@ -253,7 +975,7 @@ model WorldMap {
 }
 
 model WorldMapBuildingPreset {
-  id             String   @id @default(cuid())
+  id             String                     @id @default(cuid())
   mapId          String?
   name           String
   color          String
@@ -267,9 +989,9 @@ model WorldMapBuildingPreset {
   researchCost   Json?
   upkeep         Json?
   effects        Json?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
-  map            WorldMap? @relation(fields: [mapId], references: [id], onDelete: Cascade)
+  createdAt      DateTime                   @default(now())
+  updatedAt      DateTime                   @updatedAt
+  map            WorldMap?                  @relation(fields: [mapId], references: [id], onDelete: Cascade)
   instances      WorldMapBuildingInstance[]
 
   @@index([mapId])
@@ -277,13 +999,13 @@ model WorldMapBuildingPreset {
 }
 
 model WorldMapPresetFolder {
-  id        String   @id @default(cuid())
+  id        String                 @id @default(cuid())
   kind      String
   name      String
-  order     Int      @default(0)
+  order     Int                    @default(0)
   parentId  String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime               @default(now())
+  updatedAt DateTime               @updatedAt
   parent    WorldMapPresetFolder?  @relation("WorldMapPresetFolderTree", fields: [parentId], references: [id], onDelete: SetNull)
   children  WorldMapPresetFolder[] @relation("WorldMapPresetFolderTree")
 
@@ -330,4 +1052,3 @@ model WorldMapTickLog {
 
   @@index([mapId, day])
 }
-

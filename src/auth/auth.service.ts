@@ -28,7 +28,10 @@ export class AuthService {
     return createHash('sha256').update(token).digest('hex');
   }
 
-  async register(usernameRaw: string, passwordRaw: string): Promise<PublicUser> {
+  async register(
+    usernameRaw: string,
+    passwordRaw: string,
+  ): Promise<PublicUser> {
     const username = this.normalizeUsername(usernameRaw);
     const password = (passwordRaw ?? '').trim();
 
@@ -53,7 +56,10 @@ export class AuthService {
     return { id: user.id, username: user.username, isAdmin: user.isAdmin };
   }
 
-  async login(usernameRaw: string, passwordRaw: string): Promise<{
+  async login(
+    usernameRaw: string,
+    passwordRaw: string,
+  ): Promise<{
     token: string;
     user: PublicUser;
   }> {

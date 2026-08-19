@@ -377,7 +377,7 @@ export class ItemsComponents {
       return;
     }
 
-    let result = new GiveResult();
+    const result = new GiveResult();
     const player = new InventorySearchResult();
 
     player.owner = info.from;
@@ -463,7 +463,7 @@ export class ItemsComponents {
     }
   }
 
-  private ColorParser(quality: String | null): TextColor {
+  private ColorParser(quality: string | null): TextColor {
     switch (quality) {
       case '고급':
         return TextColor.BOLD_LIME;

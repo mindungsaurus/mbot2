@@ -129,7 +129,9 @@ export class GoldController {
           select: { isNpc: true },
         });
         if (!friendRow) {
-          throw new NotFoundException(`Character "${normalizedFriend}" not found`);
+          throw new NotFoundException(
+            `Character "${normalizedFriend}" not found`,
+          );
         }
         if (friendRow.isNpc) {
           throw new BadRequestException('friend must be a PC');

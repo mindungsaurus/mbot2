@@ -25,7 +25,19 @@ type PublishBody = {
   includeTurnSummary?: boolean;
 };
 
-type PublishRenderState = Pick<EncounterState, 'units' | 'markers' | 'blockedCells' | 'gridLabels' | 'turnOrder' | 'turnIndex' | 'round' | 'battleStarted' | 'tempTurnStack' | 'turnGroups'>;
+type PublishRenderState = Pick<
+  EncounterState,
+  | 'units'
+  | 'markers'
+  | 'blockedCells'
+  | 'gridLabels'
+  | 'turnOrder'
+  | 'turnIndex'
+  | 'round'
+  | 'battleStarted'
+  | 'tempTurnStack'
+  | 'turnGroups'
+>;
 
 type CreateEncounterBody = {
   name?: string;
@@ -139,4 +151,3 @@ function sanitizeChannelId(input?: string): string {
   const digits = s.replace(/\D/g, '');
   return digits;
 }
-

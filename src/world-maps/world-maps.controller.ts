@@ -113,6 +113,7 @@ type AppendWorldMapTickLogBody = {
 
 type RunWorldMapDailyBody = {
   days?: number;
+  clientPrediction?: Record<string, unknown>;
 };
 
 type UploadedImageFile = {
@@ -363,6 +364,6 @@ export class WorldMapsController {
     @Param('id') id: string,
     @Body() body: RunWorldMapDailyBody,
   ) {
-    return this.worldMaps.runDaily(req.user, id, body?.days);
+    return this.worldMaps.runDaily(req.user, id, body?.days, body?.clientPrediction);
   }
 }

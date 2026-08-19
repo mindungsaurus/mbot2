@@ -38,6 +38,7 @@ import type {
   MapTileRegionState,
   MapTileMemoMap,
   PopulationId,
+  PopulationEntry,
   PopulationTrackedId,
   UpkeepPopulationId,
   PublicWorldMap,
@@ -137,6 +138,73 @@ type AppendWorldMapTickLogBody = {
 type RuntimeInstance = WorldMapBuildingInstanceRow & {
   preset?: WorldMapBuildingPresetRow;
 };
+type PopulationAvailablePool = Record<PopulationId, number>;
+type CityAuditSnapshot = {
+  day: number;
+  resources: Record<ResourceId, number>;
+  population: Record<PopulationId, { total: number; available: number }>;
+};
+type CityAuditChange = {
+  before: number;
+  after: number;
+  delta: number;
+};
+type CityAuditSummary = {
+  before: CityAuditSnapshot;
+  after: CityAuditSnapshot;
+  resourceChanges: Partial<Record<ResourceId, CityAuditChange>>;
+  populationChanges: Partial<
+    Record<
+      PopulationId,
+      {
+        total?: CityAuditChange;
+        available?: CityAuditChange;
+      }
+    >
+  >;
+};
+type ClientRunPrediction = {
+  day?: number;
+  days?: number;
+  resourceDeltas?: Partial<Record<ResourceId, number>>;
+};
+type ClientRunPredictionDiff = {
+  resourceDeltas: Partial<
+    Record<ResourceId, { predicted: number; actual: number; delta: number }>
+  >;
+};
+type ResourceDeltaTraceSource =
+  | 'upkeep'
+  | 'ruleAction'
+  | 'foodConsumption'
+  | 'foodDeficitGold'
+  | 'overflowToGold';
+type ResourceDeltaTrace = {
+  source: ResourceDeltaTraceSource;
+  resourceId: ResourceId;
+  before: number;
+  after: number;
+  delta: number;
+  day?: number;
+  requestedDelta?: number;
+  event?: 'onBuild' | 'onRemove' | 'daily' | 'sustain';
+  instanceId?: string;
+  presetId?: string;
+  presetName?: string;
+  ruleId?: string;
+  repeatIndex?: number;
+  reason?: string;
+};
+type ResourceDeltaBreakdown = Partial<
+  Record<
+    ResourceId,
+    {
+      total: number;
+      bySource: Partial<Record<ResourceDeltaTraceSource, number>>;
+      entries: ResourceDeltaTrace[];
+    }
+  >
+>;
 
 const WORLD_MAP_PRESET_FOLDER_KINDS = [
   'tile',
@@ -166,6 +234,15 @@ type RuntimeContext = {
   rows: number;
   overflowTracker?: OverflowConversionTracker;
   deferCappedResourceOverflow?: boolean;
+  resourceTrace?: ResourceDeltaTrace[];
+  traceSource?: {
+    event: 'onBuild' | 'onRemove' | 'daily' | 'sustain';
+    instanceId: string;
+    presetId: string;
+    presetName: string;
+    ruleId: string;
+  };
+  repeatIndex?: number;
 };
 
 type PredicateEvalResult = {
@@ -251,6 +328,12 @@ const TRACKED_WORKER_POPULATION_IDS: PopulationTrackedId[] = [
   'engineers',
   'scholars',
   'laborers',
+];
+const ANY_NON_ELDERLY_FILL_ORDER: PopulationTrackedId[] = [
+  'settlers',
+  'engineers',
+  'laborers',
+  'scholars',
 ];
 const TROOP_STATE_MEMO_KEY = '__sys_troops_state__';
 
@@ -1181,18 +1264,20 @@ export class WorldMapsService implements OnModuleInit {
       (body?.enabled !== undefined ? !!body.enabled : true) &&
       !willActivateImmediately;
     if (shouldReserveWorkers && assignedWorkers > 0) {
+      const reservable = await this.getAvailablePopulationPoolAfterActiveUpkeep(
+        mapId,
+        cityGlobal,
+      );
       if (
-        !this.canReserveWorkersByType(
-          cityGlobal.population,
-          assignedWorkersByType,
-        )
+        !reservable.ok ||
+        !this.canReserveWorkersByType(reservable.pool, assignedWorkersByType)
       ) {
         const lacks = TRACKED_WORKER_POPULATION_IDS.map((id) => {
           const req = Math.max(0, assignedWorkersByType[id] ?? 0);
           if (req <= 0) return null;
           const cur = Math.max(
             0,
-            Math.trunc(Number(cityGlobal.population[id]?.available ?? 0) || 0),
+            Math.trunc(Number(reservable.pool[id] ?? 0) || 0),
           );
           if (cur >= req) return null;
           return `${POPULATION_LABELS[id]}(${cur}/${req})`;
@@ -1209,6 +1294,27 @@ export class WorldMapsService implements OnModuleInit {
       assignedWorkers,
       assignedWorkersByType,
     );
+    if (
+      (body?.enabled !== undefined ? !!body.enabled : true) &&
+      willActivateImmediately
+    ) {
+      const upkeepReservable =
+        await this.getAvailablePopulationPoolAfterActiveUpkeep(
+          mapId,
+          cityGlobal,
+          {
+            includeInstance: {
+              preset: normalizedPreset,
+              meta: initialMeta,
+            },
+          },
+        );
+      if (!upkeepReservable.ok) {
+        throw new BadRequestException(
+          `건물 유지 인원 부족: ${upkeepReservable.reasons.join(', ')}`,
+        );
+      }
+    }
 
     const instanceRow = await this.prisma.worldMapBuildingInstance.create({
       data: {
@@ -1314,18 +1420,45 @@ export class WorldMapsService implements OnModuleInit {
 
     const cityGlobal = this.normalizeCityGlobalInput(map.cityGlobal);
     this.releaseWorkersByType(cityGlobal.population, reservedBefore);
-    if (!this.canReserveWorkersByType(cityGlobal.population, reservedAfter)) {
+    const reservable = await this.getAvailablePopulationPoolAfterActiveUpkeep(
+      mapId,
+      cityGlobal,
+      { excludeInstanceId: instanceId },
+    );
+    if (
+      !reservable.ok ||
+      !this.canReserveWorkersByType(reservable.pool, reservedAfter)
+    ) {
       const lacks = TRACKED_WORKER_POPULATION_IDS.map((id) => {
         const req = Math.max(0, reservedAfter[id] ?? 0);
         if (req <= 0) return null;
         const cur = Math.max(
           0,
-          Math.trunc(Number(cityGlobal.population[id]?.available ?? 0) || 0),
+          Math.trunc(Number(reservable.pool[id] ?? 0) || 0),
         );
         if (cur >= req) return null;
         return `${POPULATION_LABELS[id]}(${cur}/${req})`;
       }).filter(Boolean) as string[];
       throw new BadRequestException(`건설 투입 인원 부족: ${lacks.join(', ')}`);
+    }
+    if (nextEnabled && nextStatus === 'active' && normalizedPreset) {
+      const upkeepReservable =
+        await this.getAvailablePopulationPoolAfterActiveUpkeep(
+          mapId,
+          cityGlobal,
+          {
+            excludeInstanceId: instanceId,
+            includeInstance: {
+              preset: normalizedPreset,
+              meta: nextMeta,
+            },
+          },
+        );
+      if (!upkeepReservable.ok) {
+        throw new BadRequestException(
+          `건물 유지 인원 부족: ${upkeepReservable.reasons.join(', ')}`,
+        );
+      }
     }
     this.reserveWorkersByType(cityGlobal.population, reservedAfter);
 
@@ -1523,9 +1656,16 @@ export class WorldMapsService implements OnModuleInit {
     return this.toTickLogRow(row);
   }
 
-  async runDaily(user: AuthUser, mapId: string, daysInput?: number) {
+  async runDaily(
+    user: AuthUser,
+    mapId: string,
+    daysInput?: number,
+    clientPredictionInput?: unknown,
+  ) {
     await this.requireWritable(user, mapId);
     const days = this.toInt(daysInput ?? 1, 'days', 1, 365);
+    const clientPrediction =
+      this.normalizeClientRunPrediction(clientPredictionInput);
     let summary = {
       days: 0,
       appliedRules: 0,
@@ -1543,6 +1683,8 @@ export class WorldMapsService implements OnModuleInit {
       overflowDetails: {} as Partial<
         Record<CappedResourceId, { overflowAmount: number; goldGain: number }>
       >,
+      dailyAudits: [] as CityAuditSummary[],
+      resourceTraces: [] as ResourceDeltaTrace[],
     };
     for (let i = 0; i < days; i += 1) {
       const iter = await this.applyBuildingEventEffects(
@@ -1570,6 +1712,19 @@ export class WorldMapsService implements OnModuleInit {
           Math.max(0, Math.trunc(Number(iter.foodGoldSpent ?? 0) || 0)),
         day: iter.day,
         logs: [...summary.logs, ...iter.logs].slice(-500),
+        dailyAudits: [
+          ...summary.dailyAudits,
+          ...(iter.audit ? [iter.audit] : []),
+        ].slice(-365),
+        resourceTraces: [
+          ...summary.resourceTraces,
+          ...((Array.isArray(iter.resourceTraces)
+            ? iter.resourceTraces
+            : []) as ResourceDeltaTrace[]).map((trace) => ({
+            ...trace,
+            day: iter.day,
+          })),
+        ].slice(-1000),
         overflowConvertedGold:
           summary.overflowConvertedGold +
           Math.max(0, Math.trunc(Number(iter.overflowConvertedGold ?? 0) || 0)),
@@ -1617,6 +1772,20 @@ export class WorldMapsService implements OnModuleInit {
         })(),
       };
     }
+    const runAudit =
+      summary.dailyAudits.length > 0
+        ? this.createCityAuditSummary(
+            summary.dailyAudits[0].before,
+            summary.dailyAudits[summary.dailyAudits.length - 1].after,
+          )
+        : null;
+    const predictionDiff = this.createClientRunPredictionDiff(
+      clientPrediction,
+      runAudit,
+    );
+    const resourceDeltaBreakdown = this.createResourceDeltaBreakdown(
+      summary.resourceTraces,
+    );
     await this.prisma.worldMapTickLog.create({
       data: {
         mapId,
@@ -1632,10 +1801,18 @@ export class WorldMapsService implements OnModuleInit {
           foodGoldSpent: summary.foodGoldSpent,
           day: summary.day,
           logs: summary.logs,
+          audit: runAudit,
+          dailyAudits: summary.dailyAudits,
+          resourceChanges: runAudit?.resourceChanges ?? {},
+          populationChanges: runAudit?.populationChanges ?? {},
           overflowConvertedGold: summary.overflowConvertedGold,
           overflowBeforeGold: summary.overflowBeforeGold,
           overflowAfterGold: summary.overflowAfterGold,
           overflowDetails: summary.overflowDetails,
+          clientPrediction,
+          predictionDiff,
+          resourceTraces: summary.resourceTraces,
+          resourceDeltaBreakdown,
         } as unknown as Prisma.InputJsonValue,
       },
     });
@@ -1651,7 +1828,18 @@ export class WorldMapsService implements OnModuleInit {
       ),
       goldGain: Math.max(0, Math.trunc(Number(v?.goldGain ?? 0) || 0)),
     }));
-    return { ok: true, ...summary, overflowDetails };
+    return {
+      ok: true,
+      ...summary,
+      audit: runAudit,
+      resourceChanges: runAudit?.resourceChanges ?? {},
+      populationChanges: runAudit?.populationChanges ?? {},
+      overflowDetails,
+      clientPrediction,
+      predictionDiff,
+      resourceTraces: summary.resourceTraces,
+      resourceDeltaBreakdown,
+    };
   }
 
   private async applyBuildingEventEffects(
@@ -1685,6 +1873,10 @@ export class WorldMapsService implements OnModuleInit {
 
     let cityGlobal = this.normalizeCityGlobalInput(mapRow.cityGlobal);
     if (advanceDay) cityGlobal.day = Math.max(0, cityGlobal.day + 1);
+    const auditBefore = this.createCityAuditSnapshot(cityGlobal);
+    const dailyPopulationPool = this.createPopulationAvailablePool(
+      cityGlobal.population,
+    );
     let tileStates = this.normalizeTileStateAssignmentsInput(
       mapRow.tileStateAssignments,
       this.normalizeTilePresetsInput(mapRow.tileStatePresets),
@@ -1707,9 +1899,12 @@ export class WorldMapsService implements OnModuleInit {
       if (!effects) return;
       if (!origin.preset) return;
       if (eventKind === 'daily' && !options?.skipDailyUpkeep) {
+        const upkeepBefore = this.createCityAuditSnapshot(cityGlobal);
         const upkeepCheck = this.tryConsumeDailyUpkeep(
           origin.preset,
           cityGlobal,
+          dailyPopulationPool,
+          origin.meta,
         );
         if (!upkeepCheck.ok) {
           failedRules += 1;
@@ -1723,6 +1918,24 @@ export class WorldMapsService implements OnModuleInit {
             reason: upkeepCheck.reasons.join(' / '),
           });
           return;
+        }
+        const upkeepAfter = this.createCityAuditSnapshot(cityGlobal);
+        for (const id of RESOURCE_IDS) {
+          const before = upkeepBefore.resources[id];
+          const after = upkeepAfter.resources[id];
+          this.pushResourceDeltaTrace(resourceTrace, {
+            source: 'upkeep',
+            resourceId: id,
+            before,
+            after,
+            delta: after - before,
+            event: eventKind,
+            instanceId: origin.id,
+            presetId: origin.presetId,
+            presetName: origin.preset.name,
+            ruleId: '__upkeep__',
+            reason: '건물 유지비',
+          });
         }
       }
       const rules =
@@ -1768,6 +1981,14 @@ export class WorldMapsService implements OnModuleInit {
           rows: mapRow.rows,
           overflowTracker,
           deferCappedResourceOverflow: event === 'daily',
+          resourceTrace,
+          traceSource: {
+            event: eventKind,
+            instanceId: origin.id,
+            presetId: origin.presetId,
+            presetName: origin.preset.name,
+            ruleId: String(rule.id ?? ''),
+          },
         };
         const pred = rule.when
           ? this.evaluateRulePredicateDetailed(rule.when, ctx)
@@ -1791,6 +2012,7 @@ export class WorldMapsService implements OnModuleInit {
         appliedRules += 1;
         let ruleAppliedActions = 0;
         for (let repeatIdx = 0; repeatIdx < repeatCount; repeatIdx += 1) {
+          ctx.repeatIndex = repeatIdx;
           for (const action of rule.actions) {
             if (this.applyRuleAction(action, ctx)) {
               appliedActions += 1;
@@ -1842,6 +2064,7 @@ export class WorldMapsService implements OnModuleInit {
     let appliedActions = 0;
     let failedRules = 0;
     const logs: RuleExecutionLog[] = [];
+    const resourceTrace: ResourceDeltaTrace[] = [];
     const overflowTracker: OverflowConversionTracker = {
       convertedGold: 0,
       details: {},
@@ -1987,8 +2210,56 @@ export class WorldMapsService implements OnModuleInit {
     // Population consumes food once per day. If food is insufficient,
     // spend gold by configured foodDeficitGoldRate for the deficit amount.
     if (event === 'daily') {
+      const foodBefore = Math.max(
+        0,
+        Math.trunc(Number(cityGlobal.values.food ?? 0) || 0),
+      );
+      const goldBeforeFood = Math.max(
+        0,
+        Math.trunc(Number(cityGlobal.values.gold ?? 0) || 0),
+      );
       foodConsumption = this.applyPopulationFoodConsumption(cityGlobal);
+      const foodAfter = Math.max(
+        0,
+        Math.trunc(Number(cityGlobal.values.food ?? 0) || 0),
+      );
+      const goldAfterFood = Math.max(
+        0,
+        Math.trunc(Number(cityGlobal.values.gold ?? 0) || 0),
+      );
+      this.pushResourceDeltaTrace(resourceTrace, {
+        source: 'foodConsumption',
+        resourceId: 'food',
+        before: foodBefore,
+        after: foodAfter,
+        delta: foodAfter - foodBefore,
+        reason: `인구 식량 소비 필요 ${foodConsumption.requiredFood}, 소비 ${foodConsumption.consumedFood}`,
+      });
+      this.pushResourceDeltaTrace(resourceTrace, {
+        source: 'foodDeficitGold',
+        resourceId: 'gold',
+        before: goldBeforeFood,
+        after: goldAfterFood,
+        delta: goldAfterFood - goldBeforeFood,
+        reason: `식량 부족 ${foodConsumption.deficitFood} 보전`,
+      });
+      const goldBeforeOverflow = Math.max(
+        0,
+        Math.trunc(Number(cityGlobal.values.gold ?? 0) || 0),
+      );
       this.finalizeDeferredCappedResourceOverflow(cityGlobal, overflowTracker);
+      const goldAfterOverflow = Math.max(
+        0,
+        Math.trunc(Number(cityGlobal.values.gold ?? 0) || 0),
+      );
+      this.pushResourceDeltaTrace(resourceTrace, {
+        source: 'overflowToGold',
+        resourceId: 'gold',
+        before: goldBeforeOverflow,
+        after: goldAfterOverflow,
+        delta: goldAfterOverflow - goldBeforeOverflow,
+        reason: '일일 자원 초과분 금 환전',
+      });
     }
 
     if (instancePatchById.size > 0) {
@@ -2009,6 +2280,9 @@ export class WorldMapsService implements OnModuleInit {
     }
 
     const normalizedCityGlobal = this.normalizeCityGlobalInput(cityGlobal);
+    const auditAfter = this.createCityAuditSnapshot(normalizedCityGlobal);
+    const audit = this.createCityAuditSummary(auditBefore, auditAfter);
+    const resourceDeltaBreakdown = this.createResourceDeltaBreakdown(resourceTrace);
     const normalizedTileStates = this.normalizeTileStateAssignmentsInput(
       tileStates,
       this.normalizeTilePresetsInput(mapRow.tileStatePresets),
@@ -2048,6 +2322,11 @@ export class WorldMapsService implements OnModuleInit {
         0,
         Math.trunc(Number(foodConsumption.goldSpent ?? 0) || 0),
       ),
+      audit,
+      resourceChanges: audit.resourceChanges,
+      populationChanges: audit.populationChanges,
+      resourceTraces: resourceTrace,
+      resourceDeltaBreakdown,
       logs,
       overflowConvertedGold: Math.max(
         0,
@@ -2421,6 +2700,20 @@ export class WorldMapsService implements OnModuleInit {
             const goldGain = overflow * rate;
             const nextGold = currentGold + goldGain;
             ctx.cityGlobal.values.gold = nextGold;
+            this.pushResourceDeltaTrace(ctx.resourceTrace, {
+              source: 'overflowToGold',
+              resourceId: 'gold',
+              before: currentGold,
+              after: nextGold,
+              delta: nextGold - currentGold,
+              event: ctx.traceSource?.event,
+              instanceId: ctx.traceSource?.instanceId,
+              presetId: ctx.traceSource?.presetId,
+              presetName: ctx.traceSource?.presetName,
+              ruleId: ctx.traceSource?.ruleId,
+              repeatIndex: ctx.repeatIndex,
+              reason: `${this.getBuildingResourceLabel(resourceId)} 초과분 금 환전`,
+            });
             const tracker = ctx.overflowTracker;
             if (tracker) {
               if (tracker.beforeGold == null) tracker.beforeGold = currentGold;
@@ -2439,6 +2732,23 @@ export class WorldMapsService implements OnModuleInit {
         }
       }
       this.setBuildingResourceAmount(ctx.cityGlobal, resourceId, next);
+      if (this.isBaseResourceId(resourceId)) {
+        this.pushResourceDeltaTrace(ctx.resourceTrace, {
+          source: 'ruleAction',
+          resourceId,
+          before: current,
+          after: next,
+          delta: next - current,
+          requestedDelta: delta,
+          event: ctx.traceSource?.event,
+          instanceId: ctx.traceSource?.instanceId,
+          presetId: ctx.traceSource?.presetId,
+          presetName: ctx.traceSource?.presetName,
+          ruleId: ctx.traceSource?.ruleId,
+          repeatIndex: ctx.repeatIndex,
+          reason: '규칙 자원 조정',
+        });
+      }
       return delta !== 0;
     }
     if (action.kind === 'adjustResourceCap') {
@@ -2693,6 +3003,168 @@ export class WorldMapsService implements OnModuleInit {
     );
   }
 
+  private createCityAuditSnapshot(
+    cityGlobal: CityGlobalState,
+  ): CityAuditSnapshot {
+    const resources = {} as Record<ResourceId, number>;
+    for (const id of RESOURCE_IDS) {
+      resources[id] = Math.max(
+        0,
+        Math.trunc(Number(cityGlobal.values[id] ?? 0) || 0),
+      );
+    }
+    const population = {} as Record<
+      PopulationId,
+      { total: number; available: number }
+    >;
+    for (const id of POPULATION_IDS) {
+      const entry = cityGlobal.population[id] ?? { total: 0, available: 0 };
+      population[id] = {
+        total: Math.max(0, Math.trunc(Number(entry.total ?? 0) || 0)),
+        available: Math.max(0, Math.trunc(Number(entry.available ?? 0) || 0)),
+      };
+    }
+    return {
+      day: Math.max(0, Math.trunc(Number(cityGlobal.day ?? 0) || 0)),
+      resources,
+      population,
+    };
+  }
+
+  private createCityAuditSummary(
+    before: CityAuditSnapshot,
+    after: CityAuditSnapshot,
+  ): CityAuditSummary {
+    const resourceChanges: Partial<Record<ResourceId, CityAuditChange>> = {};
+    for (const id of RESOURCE_IDS) {
+      const prev = Math.max(0, Math.trunc(Number(before.resources[id] ?? 0) || 0));
+      const next = Math.max(0, Math.trunc(Number(after.resources[id] ?? 0) || 0));
+      if (prev === next) continue;
+      resourceChanges[id] = { before: prev, after: next, delta: next - prev };
+    }
+
+    const populationChanges: CityAuditSummary['populationChanges'] = {};
+    for (const id of POPULATION_IDS) {
+      const prev = before.population[id] ?? { total: 0, available: 0 };
+      const next = after.population[id] ?? { total: 0, available: 0 };
+      const entry: {
+        total?: CityAuditChange;
+        available?: CityAuditChange;
+      } = {};
+      if (prev.total !== next.total) {
+        entry.total = {
+          before: prev.total,
+          after: next.total,
+          delta: next.total - prev.total,
+        };
+      }
+      if (prev.available !== next.available) {
+        entry.available = {
+          before: prev.available,
+          after: next.available,
+          delta: next.available - prev.available,
+        };
+      }
+      if (entry.total || entry.available) populationChanges[id] = entry;
+    }
+
+    return { before, after, resourceChanges, populationChanges };
+  }
+
+  private normalizeClientRunPrediction(input: unknown): ClientRunPrediction | null {
+    const record = this.toPlainRecord(input);
+    if (!record) return null;
+    const resourceDeltasIn = this.toPlainRecord(record.resourceDeltas);
+    const resourceDeltas: Partial<Record<ResourceId, number>> = {};
+    if (resourceDeltasIn) {
+      for (const id of RESOURCE_IDS) {
+        if (!(id in resourceDeltasIn)) continue;
+        const value = Math.trunc(Number(resourceDeltasIn[id] ?? 0) || 0);
+        if (!Number.isFinite(value) || value === 0) continue;
+        resourceDeltas[id] = value;
+      }
+    }
+    const prediction: ClientRunPrediction = {};
+    const day = Math.trunc(Number(record.day ?? 0) || 0);
+    if (Number.isFinite(day) && day >= 0) prediction.day = day;
+    const days = Math.trunc(Number(record.days ?? 0) || 0);
+    if (Number.isFinite(days) && days > 0) prediction.days = days;
+    if (Object.keys(resourceDeltas).length > 0) {
+      prediction.resourceDeltas = resourceDeltas;
+    }
+    return Object.keys(prediction).length > 0 ? prediction : null;
+  }
+
+  private createClientRunPredictionDiff(
+    prediction: ClientRunPrediction | null,
+    audit: CityAuditSummary | null,
+  ): ClientRunPredictionDiff | null {
+    if (!prediction?.resourceDeltas || !audit) return null;
+    const resourceDeltas: ClientRunPredictionDiff['resourceDeltas'] = {};
+    for (const id of RESOURCE_IDS) {
+      const predictedRaw = prediction.resourceDeltas[id];
+      if (predictedRaw == null) continue;
+      const predicted = Math.trunc(Number(predictedRaw) || 0);
+      if (!Number.isFinite(predicted)) continue;
+      const actual = Math.trunc(
+        Number(audit.resourceChanges[id]?.delta ?? 0) || 0,
+      );
+      const delta = actual - predicted;
+      if (delta === 0) continue;
+      resourceDeltas[id] = { predicted, actual, delta };
+    }
+    return Object.keys(resourceDeltas).length > 0 ? { resourceDeltas } : null;
+  }
+
+  private pushResourceDeltaTrace(
+    traces: ResourceDeltaTrace[] | undefined,
+    trace: ResourceDeltaTrace,
+  ) {
+    if (!traces) return;
+    const before = Math.trunc(Number(trace.before) || 0);
+    const after = Math.trunc(Number(trace.after) || 0);
+    const delta = Math.trunc(Number(trace.delta ?? after - before) || 0);
+    if (!Number.isFinite(before) || !Number.isFinite(after) || !Number.isFinite(delta)) {
+      return;
+    }
+    if (delta === 0) return;
+    traces.push({
+      ...trace,
+      before,
+      after,
+      delta,
+      ...(trace.requestedDelta != null
+        ? { requestedDelta: Math.trunc(Number(trace.requestedDelta) || 0) }
+        : {}),
+    });
+  }
+
+  private createResourceDeltaBreakdown(
+    traces: ResourceDeltaTrace[],
+  ): ResourceDeltaBreakdown {
+    const breakdown: ResourceDeltaBreakdown = {};
+    for (const trace of traces) {
+      const resourceId = trace.resourceId;
+      const delta = Math.trunc(Number(trace.delta) || 0);
+      if (!RESOURCE_IDS.includes(resourceId) || !Number.isFinite(delta) || delta === 0) {
+        continue;
+      }
+      const entry =
+        breakdown[resourceId] ??
+        ({
+          total: 0,
+          bySource: {},
+          entries: [],
+        } satisfies NonNullable<ResourceDeltaBreakdown[ResourceId]>);
+      entry.total += delta;
+      entry.bySource[trace.source] =
+        Math.trunc(Number(entry.bySource[trace.source] ?? 0) || 0) + delta;
+      if (entry.entries.length < 200) entry.entries.push(trace);
+      breakdown[resourceId] = entry;
+    }
+    return breakdown;
+  }
+
   private getAvailableNonElderly(population: CityPopulationState) {
     return (
       Math.max(0, population.settlers?.available ?? 0) +
@@ -2700,6 +3172,195 @@ export class WorldMapsService implements OnModuleInit {
       Math.max(0, population.scholars?.available ?? 0) +
       Math.max(0, population.laborers?.available ?? 0)
     );
+  }
+
+  private getAvailableNonElderlyFromPool(pool: PopulationAvailablePool) {
+    return TRACKED_WORKER_POPULATION_IDS.reduce(
+      (sum, id) => sum + Math.max(0, Math.trunc(Number(pool[id] ?? 0) || 0)),
+      0,
+    );
+  }
+
+  private createPopulationAvailablePool(
+    population: CityPopulationState,
+  ): PopulationAvailablePool {
+    return {
+      settlers: Math.max(
+        0,
+        Math.trunc(Number(population.settlers?.available ?? 0) || 0),
+      ),
+      engineers: Math.max(
+        0,
+        Math.trunc(Number(population.engineers?.available ?? 0) || 0),
+      ),
+      scholars: Math.max(
+        0,
+        Math.trunc(Number(population.scholars?.available ?? 0) || 0),
+      ),
+      laborers: Math.max(
+        0,
+        Math.trunc(Number(population.laborers?.available ?? 0) || 0),
+      ),
+      elderly: Math.max(
+        0,
+        Math.trunc(Number(population.elderly?.available ?? 0) || 0),
+      ),
+    };
+  }
+
+  private readUpkeepAnyNonElderlyByTypeFromMeta(
+    meta: unknown,
+  ): Record<PopulationTrackedId, number> {
+    const base = this.toPlainRecord(meta) ?? {};
+    const build = this.toPlainRecord(base.buildMeta) ?? {};
+    const byTypeRaw =
+      this.toPlainRecord(build.upkeepAnyNonElderlyByType) ??
+      this.toPlainRecord(base.upkeepAnyNonElderlyByType) ??
+      {};
+    const out: Record<PopulationTrackedId, number> = {
+      settlers: 0,
+      engineers: 0,
+      scholars: 0,
+      laborers: 0,
+    };
+    for (const id of TRACKED_WORKER_POPULATION_IDS) {
+      out[id] = Math.max(0, Math.trunc(Number(byTypeRaw[id] ?? 0) || 0));
+    }
+    return out;
+  }
+
+  private consumePopulationUpkeepFromPool(
+    pool: PopulationAvailablePool,
+    populationCosts: Partial<Record<UpkeepPopulationId, number>>,
+    meta?: unknown,
+  ) {
+    const reasons: string[] = [];
+    const fixedCosts: Partial<Record<PopulationId, number>> = {};
+    for (const id of POPULATION_IDS) {
+      fixedCosts[id] = Math.max(
+        0,
+        Math.trunc(Number(populationCosts[id] ?? 0) || 0),
+      );
+    }
+
+    for (const id of POPULATION_IDS) {
+      const cost = fixedCosts[id] ?? 0;
+      if (cost <= 0) continue;
+      const current = Math.max(0, Math.trunc(Number(pool[id] ?? 0) || 0));
+      if (current < cost) {
+        reasons.push(`${POPULATION_LABELS[id]} 부족(${current}/${cost})`);
+      }
+    }
+
+    const requiredAnyNonElderly = Math.max(
+      0,
+      Math.trunc(Number(populationCosts.anyNonElderly ?? 0) || 0),
+    );
+    const requestedAnyByType =
+      this.readUpkeepAnyNonElderlyByTypeFromMeta(meta);
+    const assignedAnyByType: Record<PopulationTrackedId, number> = {
+      settlers: 0,
+      engineers: 0,
+      scholars: 0,
+      laborers: 0,
+    };
+    const poolAfterFixed: PopulationAvailablePool = { ...pool };
+    for (const id of POPULATION_IDS) {
+      poolAfterFixed[id] = Math.max(
+        0,
+        Math.trunc(Number(poolAfterFixed[id] ?? 0) || 0) -
+          Math.max(0, Math.trunc(Number(fixedCosts[id] ?? 0) || 0)),
+      );
+    }
+
+    if (requiredAnyNonElderly > 0) {
+      let remaining = requiredAnyNonElderly;
+      for (const id of ANY_NON_ELDERLY_FILL_ORDER) {
+        if (remaining <= 0) break;
+        const want = Math.max(
+          0,
+          Math.trunc(Number(requestedAnyByType[id] ?? 0) || 0),
+        );
+        const used = Math.min(poolAfterFixed[id], want, remaining);
+        assignedAnyByType[id] += used;
+        poolAfterFixed[id] = Math.max(0, poolAfterFixed[id] - used);
+        remaining -= used;
+      }
+      for (const id of ANY_NON_ELDERLY_FILL_ORDER) {
+        if (remaining <= 0) break;
+        const used = Math.min(poolAfterFixed[id], remaining);
+        assignedAnyByType[id] += used;
+        poolAfterFixed[id] = Math.max(0, poolAfterFixed[id] - used);
+        remaining -= used;
+      }
+      if (remaining > 0) {
+        reasons.push(
+          `${POPULATION_LABELS.anyNonElderly} 부족(${this.getAvailableNonElderlyFromPool(poolAfterFixed)}/${remaining})`,
+        );
+      }
+    }
+
+    if (reasons.length > 0) {
+      return { ok: false as const, reasons, assignedAnyByType };
+    }
+
+    for (const id of POPULATION_IDS) {
+      pool[id] = Math.max(
+        0,
+        Math.trunc(Number(pool[id] ?? 0) || 0) -
+          Math.max(0, Math.trunc(Number(fixedCosts[id] ?? 0) || 0)),
+      );
+    }
+    for (const id of TRACKED_WORKER_POPULATION_IDS) {
+      pool[id] = Math.max(0, pool[id] - assignedAnyByType[id]);
+    }
+    return { ok: true as const, reasons: [] as string[], assignedAnyByType };
+  }
+
+  private async getAvailablePopulationPoolAfterActiveUpkeep(
+    mapId: string,
+    cityGlobal: CityGlobalState,
+    options?: {
+      excludeInstanceId?: string;
+      includeInstance?: {
+        preset: WorldMapBuildingPresetRow;
+        meta?: unknown;
+      };
+    },
+  ) {
+    const pool = this.createPopulationAvailablePool(cityGlobal.population);
+    const rows = await this.prisma.worldMapBuildingInstance.findMany({
+      where: {
+        mapId,
+        enabled: true,
+        ...(options?.excludeInstanceId
+          ? { id: { not: options.excludeInstanceId } }
+          : {}),
+      },
+      include: { preset: true },
+      orderBy: [{ row: 'asc' }, { col: 'asc' }, { createdAt: 'asc' }],
+    });
+    for (const row of rows) {
+      const instance = this.toBuildingInstanceRow(row);
+      const preset = this.toBuildingPresetRow(row.preset);
+      const status = this.getBuildStatusForInstance(instance, preset);
+      if (status !== 'active') continue;
+      const result = this.consumePopulationUpkeepFromPool(
+        pool,
+        preset.upkeep?.population ?? {},
+        instance.meta,
+      );
+      if (!result.ok) continue;
+    }
+    if (options?.includeInstance) {
+      const result = this.consumePopulationUpkeepFromPool(
+        pool,
+        options.includeInstance.preset.upkeep?.population ?? {},
+        options.includeInstance.meta,
+      );
+      if (!result.ok) return { pool, ok: false as const, reasons: result.reasons };
+    }
+    return { pool, ok: true as const, reasons: [] as string[] };
   }
 
   private applyPopulationFoodConsumption(cityGlobal: CityGlobalState) {
@@ -2853,6 +3514,21 @@ export class WorldMapsService implements OnModuleInit {
     return null;
   }
 
+  private getBuildStatusForInstance(
+    instance: Pick<WorldMapBuildingInstanceRow, 'progressEffort' | 'meta'>,
+    preset?: Pick<WorldMapBuildingPresetRow, 'effort'> | null,
+  ): BuildRuntimeStatus {
+    const requiredEffort = Math.max(
+      0,
+      Math.trunc(Number(preset?.effort ?? 0)),
+    );
+    if (requiredEffort <= 0) return 'active';
+    return (
+      this.readBuildStatusFromMeta(instance.meta) ??
+      (instance.progressEffort >= requiredEffort ? 'active' : 'building')
+    );
+  }
+
   private withBuildMeta(
     meta: unknown,
     status: BuildRuntimeStatus,
@@ -2892,7 +3568,9 @@ export class WorldMapsService implements OnModuleInit {
   }
 
   private canReserveWorkersByType(
-    population: CityPopulationState,
+    populationOrPool:
+      | CityPopulationState
+      | Partial<Record<PopulationTrackedId, number>>,
     workersByType: Record<PopulationTrackedId, number>,
   ) {
     for (const id of TRACKED_WORKER_POPULATION_IDS) {
@@ -2903,7 +3581,14 @@ export class WorldMapsService implements OnModuleInit {
       if (required <= 0) continue;
       const available = Math.max(
         0,
-        Math.trunc(Number(population[id]?.available ?? 0) || 0),
+        Math.trunc(
+          Number(
+            typeof populationOrPool[id] === 'number'
+              ? populationOrPool[id]
+              : (populationOrPool[id] as PopulationEntry | undefined)
+                  ?.available,
+          ) || 0,
+        ),
       );
       if (available < required) return false;
     }
@@ -2954,6 +3639,8 @@ export class WorldMapsService implements OnModuleInit {
   private tryConsumeDailyUpkeep(
     preset: WorldMapBuildingPresetRow,
     cityGlobal: CityGlobalState,
+    populationPool?: PopulationAvailablePool,
+    meta?: unknown,
   ) {
     const upkeep = preset.upkeep ?? {};
     const resourceCosts = upkeep.resources ?? {};
@@ -2973,47 +3660,17 @@ export class WorldMapsService implements OnModuleInit {
       }
     }
 
-    for (const [rawId, rawCost] of Object.entries(populationCosts)) {
-      const populationId = rawId as UpkeepPopulationId;
-      const cost = Math.max(0, Math.trunc(Number(rawCost) || 0));
-      if (cost <= 0) continue;
-      if (populationId === 'anyNonElderly') {
-        const current = this.getAvailableNonElderly(cityGlobal.population);
-        if (current < cost) {
-          reasons.push(
-            `${POPULATION_LABELS[populationId]} 부족(${current}/${cost})`,
-          );
-        }
-        continue;
-      }
-      if (populationId === 'elderly') {
-        const current = Math.max(
-          0,
-          Math.trunc(
-            Number(
-              cityGlobal.population.elderly?.available ??
-                cityGlobal.population.elderly?.total ??
-                0,
-            ),
-          ),
-        );
-        if (current < cost) {
-          reasons.push(
-            `${POPULATION_LABELS[populationId]} 부족(${current}/${cost})`,
-          );
-        }
-        continue;
-      }
-      const entry = cityGlobal.population[populationId] ?? {
-        total: 0,
-        available: 0,
-      };
-      const current = Math.max(0, Math.trunc(Number(entry.available ?? 0)));
-      if (current < cost) {
-        reasons.push(
-          `${POPULATION_LABELS[populationId]} 부족(${current}/${cost})`,
-        );
-      }
+    const upkeepPopulationPool =
+      populationPool ?? this.createPopulationAvailablePool(cityGlobal.population);
+    const populationPoolForCheck =
+      reasons.length > 0 ? { ...upkeepPopulationPool } : upkeepPopulationPool;
+    const populationCheck = this.consumePopulationUpkeepFromPool(
+      populationPoolForCheck,
+      populationCosts,
+      meta,
+    );
+    if (!populationCheck.ok) {
+      reasons.push(...populationCheck.reasons);
     }
 
     if (reasons.length > 0) return { ok: false as const, reasons };

@@ -114,6 +114,64 @@ enum DiscordCollectionStatus {
   FAILED
 }
 
+enum UserCapabilityType {
+  AI_EXECUTE
+  AI_BUDGET_MANAGE
+  HISTORY_VIEW
+  HISTORY_REVIEW
+  HISTORY_APPROVE
+  HISTORY_EDIT
+}
+
+enum AnalysisJobType {
+  SMOKE_TEST
+  CHUNK_ANALYSIS
+  FRAGMENT_MERGE
+  PERSON_EVENT_GENERATION
+  BIOGRAPHY_GENERATION
+}
+
+enum AnalysisJobStatus {
+  WAITING_AUTHORIZATION
+  QUEUED
+  RUNNING
+  PAUSED
+  SUCCEEDED
+  COMPLETED_WITH_ERRORS
+  FAILED
+  CANCELED
+}
+
+enum AnalysisTaskType {
+  SMOKE_TEST
+  CHUNK_ANALYSIS
+  FRAGMENT_MERGE
+  PERSON_EVENT_GENERATION
+  BIOGRAPHY_GENERATION
+}
+
+enum AnalysisTaskStatus {
+  WAITING_AUTHORIZATION
+  QUEUED
+  RUNNING
+  PAUSED
+  SUCCEEDED
+  FAILED
+  CANCELED
+}
+
+enum AnalysisRunStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+enum AnalysisPriority {
+  HIGH
+  NORMAL
+  LOW
+}
+
 model ItemsInfo {
   id               Int                   @id @default(autoincrement())
   name             String                @unique
@@ -515,6 +573,8 @@ model Campaign {
   actorRules       ActorRule[]
   storyTimeAnchors StoryTimeAnchor[]
   collectionRuns   DiscordCollectionRun[]
+  analysisJobs     AnalysisJob[]
+  analysisTasks    AnalysisTask[]
 }
 
 model Person {
@@ -761,6 +821,96 @@ model StoryTimeAnchor {
   @@index([storyDay])
 }
 
+model AnalysisJob {
+  id              String            @id @default(cuid())
+  campaignId      String
+  type            AnalysisJobType
+  status          AnalysisJobStatus @default(WAITING_AUTHORIZATION)
+  priority        AnalysisPriority  @default(NORMAL)
+  createdByUserId String
+  maxBudget       Decimal?          @db.Decimal(12, 6)
+  startedAt       DateTime?
+  finishedAt      DateTime?
+  pausedAt        DateTime?
+  canceledAt      DateTime?
+  cancelReason    String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  campaign        Campaign          @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  createdByUser   User              @relation("AnalysisJobCreatedBy", fields: [createdByUserId], references: [id], onDelete: Restrict)
+  tasks           AnalysisTask[]
+
+  @@index([campaignId, createdAt])
+  @@index([status, priority, createdAt])
+  @@index([createdByUserId])
+}
+
+model AnalysisTask {
+  id                 String             @id @default(cuid())
+  jobId              String
+  campaignId         String
+  type               AnalysisTaskType
+  status             AnalysisTaskStatus @default(WAITING_AUTHORIZATION)
+  priority           AnalysisPriority   @default(NORMAL)
+  idempotencyKey     String?
+  payloadJson        Json?
+  resultJson         Json?
+  authorizedByUserId String?
+  authorizedAt       DateTime?
+  attemptCount       Int                @default(0)
+  maxAttempts        Int                @default(3)
+  lastError          String?
+  lockedAt           DateTime?
+  lockExpiresAt      DateTime?
+  heartbeatAt        DateTime?
+  workerId           String?
+  runAfterAt         DateTime?
+  startedAt          DateTime?
+  finishedAt         DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  job                AnalysisJob        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  campaign           Campaign           @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  authorizedByUser   User?              @relation("AnalysisTaskAuthorizedBy", fields: [authorizedByUserId], references: [id], onDelete: SetNull)
+  runs               AnalysisRun[]
+
+  @@unique([campaignId, idempotencyKey])
+  @@index([jobId, status])
+  @@index([campaignId, status])
+  @@index([status, priority, runAfterAt, createdAt])
+  @@index([lockExpiresAt])
+  @@index([authorizedByUserId])
+}
+
+model AnalysisRun {
+  id                  String            @id @default(cuid())
+  taskId              String
+  authorizedByUserId  String?
+  authorizedAt        DateTime?
+  attemptNumber       Int
+  provider            String
+  model               String
+  promptVersion       String
+  pipelineVersion     String?
+  inputTokens         Int?
+  outputTokens        Int?
+  totalTokens         Int?
+  estimatedCost       Decimal?          @db.Decimal(12, 6)
+  status              AnalysisRunStatus
+  startedAt           DateTime          @default(now())
+  finishedAt          DateTime?
+  errorMessage        String?
+  rawResponseJson     Json?
+  requestMetadataJson Json?
+  task                AnalysisTask      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  authorizedByUser    User?             @relation("AnalysisRunAuthorizedBy", fields: [authorizedByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([taskId, attemptNumber])
+  @@index([taskId, startedAt])
+  @@index([status])
+  @@index([authorizedByUserId])
+}
+
 model User {
   id                    String                 @id @default(cuid())
   username              String                 @unique
@@ -777,6 +927,10 @@ model User {
   worldMaps             WorldMap[]
   campaignParticipants  CampaignParticipant[]
   discordCollectionRuns DiscordCollectionRun[]
+  capabilities          UserCapability[]
+  createdAnalysisJobs   AnalysisJob[]          @relation("AnalysisJobCreatedBy")
+  authorizedTasks       AnalysisTask[]         @relation("AnalysisTaskAuthorizedBy")
+  authorizedRuns        AnalysisRun[]          @relation("AnalysisRunAuthorizedBy")
 }
 
 model UserSession {
@@ -786,6 +940,17 @@ model UserSession {
   createdAt  DateTime @default(now())
   lastSeenAt DateTime @default(now())
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model UserCapability {
+  id         String             @id @default(cuid())
+  userId     String
+  capability UserCapabilityType
+  createdAt  DateTime           @default(now())
+  user       User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, capability])
+  @@index([capability])
 }
 
 model Encounter {

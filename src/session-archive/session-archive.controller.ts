@@ -13,9 +13,13 @@ import {
 } from '@nestjs/common';
 import { AdminGuard } from '../auth/admin.guard';
 import { AuthGuard } from '../auth/auth.guard';
+import { CapabilityGuard } from '../auth/capability.guard';
+import { RequireCapability } from '../auth/capability.decorator';
 import type { AuthRequest } from '../auth/auth.types';
 import type {
   ActorRuleListQuery,
+  AnalysisJobListQuery,
+  CancelAnalysisJobBody,
   CreateActorRuleBody,
   CreateCampaignBody,
   CreateCampaignParticipantBody,
@@ -25,6 +29,7 @@ import type {
   CreateLogSourceCoverageBody,
   CreatePersonAliasBody,
   CreatePersonBody,
+  CreateSmokeAnalysisJobBody,
   CreateStoryTimeAnchorBody,
   LogSourceCoverageListQuery,
   PersonListQuery,
@@ -41,6 +46,7 @@ import type {
   UpdateStoryTimeAnchorBody,
   UpsertAffinityBody,
 } from './session-archive.dto';
+import { SessionArchiveAiService } from './session-archive-ai.service';
 import { SessionArchiveCollectionService } from './session-archive-collection.service';
 import { SessionArchiveService } from './session-archive.service';
 
@@ -49,6 +55,7 @@ export class SessionArchiveController {
   constructor(
     private readonly archive: SessionArchiveService,
     private readonly collection: SessionArchiveCollectionService,
+    private readonly ai: SessionArchiveAiService,
   ) {}
 
   @Get('campaigns')
@@ -386,5 +393,87 @@ export class SessionArchiveController {
   @UseGuards(AuthGuard, AdminGuard)
   deleteLogSourceCoverage(@Param('coverageId') coverageId: string) {
     return this.archive.deleteLogSourceCoverage(coverageId);
+  }
+
+  @Get('ai/jobs')
+  @UseGuards(AuthGuard, AdminGuard)
+  listAnalysisJobs(@Query() query: AnalysisJobListQuery) {
+    return this.ai.listJobs(query);
+  }
+
+  @Get('ai/jobs/:jobId')
+  @UseGuards(AuthGuard, AdminGuard)
+  getAnalysisJob(@Param('jobId') jobId: string) {
+    return this.ai.getJob(jobId);
+  }
+
+  @Get('ai/tasks/:taskId')
+  @UseGuards(AuthGuard, AdminGuard)
+  getAnalysisTask(@Param('taskId') taskId: string) {
+    return this.ai.getTask(taskId);
+  }
+
+  @Post('ai/campaigns/:campaignId/smoke-jobs')
+  @UseGuards(AuthGuard, AdminGuard)
+  createSmokeAnalysisJob(
+    @Param('campaignId') campaignId: string,
+    @Body() body: CreateSmokeAnalysisJobBody,
+    @Req() req: AuthRequest,
+  ) {
+    return this.ai.createSmokeJob(campaignId, body, req.user.id);
+  }
+
+  @Post('ai/jobs/:jobId/authorize')
+  @RequireCapability('AI_EXECUTE')
+  @UseGuards(AuthGuard, CapabilityGuard)
+  authorizeAnalysisJob(
+    @Param('jobId') jobId: string,
+    @Req() req: AuthRequest,
+  ) {
+    return this.ai.authorizeJob(jobId, req.user.id);
+  }
+
+  @Post('ai/tasks/:taskId/authorize')
+  @RequireCapability('AI_EXECUTE')
+  @UseGuards(AuthGuard, CapabilityGuard)
+  authorizeAnalysisTask(
+    @Param('taskId') taskId: string,
+    @Req() req: AuthRequest,
+  ) {
+    return this.ai.authorizeTask(taskId, req.user.id);
+  }
+
+  @Post('ai/jobs/:jobId/pause')
+  @RequireCapability('AI_EXECUTE')
+  @UseGuards(AuthGuard, CapabilityGuard)
+  pauseAnalysisJob(@Param('jobId') jobId: string) {
+    return this.ai.pauseJob(jobId);
+  }
+
+  @Post('ai/jobs/:jobId/resume')
+  @RequireCapability('AI_EXECUTE')
+  @UseGuards(AuthGuard, CapabilityGuard)
+  resumeAnalysisJob(@Param('jobId') jobId: string) {
+    return this.ai.resumeJob(jobId);
+  }
+
+  @Post('ai/jobs/:jobId/cancel')
+  @RequireCapability('AI_EXECUTE')
+  @UseGuards(AuthGuard, CapabilityGuard)
+  cancelAnalysisJob(
+    @Param('jobId') jobId: string,
+    @Body() body: CancelAnalysisJobBody,
+  ) {
+    return this.ai.cancelJob(jobId, body?.reason);
+  }
+
+  @Post('ai/tasks/:taskId/retry')
+  @RequireCapability('AI_EXECUTE')
+  @UseGuards(AuthGuard, CapabilityGuard)
+  retryAnalysisTask(
+    @Param('taskId') taskId: string,
+    @Req() req: AuthRequest,
+  ) {
+    return this.ai.retryTask(taskId, req.user.id);
   }
 }

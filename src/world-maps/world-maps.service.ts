@@ -1291,7 +1291,6 @@ export class WorldMapsService implements OnModuleInit {
           `건설 투입 인원 부족: ${lacks.join(', ')}`,
         );
       }
-      this.reserveWorkersByType(cityGlobal.population, assignedWorkersByType);
     }
     const initialMeta = this.withBuildMeta(
       this.toPlainRecord(body?.meta),
@@ -1411,20 +1410,12 @@ export class WorldMapsService implements OnModuleInit {
       scholars: 0,
       laborers: 0,
     };
-    const currentWorkersByType = this.extractAssignedWorkersByTypeFromMeta(
-      current.meta,
-    );
-    const reservedBefore =
-      current.enabled && currentStatus === 'building'
-        ? currentWorkersByType
-        : emptyWorkers;
     const reservedAfter =
       nextEnabled && nextStatus === 'building'
         ? nextWorkersByType
         : emptyWorkers;
 
     const cityGlobal = this.normalizeCityGlobalInput(map.cityGlobal);
-    this.releaseWorkersByType(cityGlobal.population, reservedBefore);
     const reservable = await this.getAvailablePopulationPoolAfterActiveUpkeep(
       mapId,
       cityGlobal,
@@ -1465,7 +1456,6 @@ export class WorldMapsService implements OnModuleInit {
         );
       }
     }
-    this.reserveWorkersByType(cityGlobal.population, reservedAfter);
 
     const data: Prisma.WorldMapBuildingInstanceUpdateInput = {
       enabled: nextEnabled,
@@ -1581,14 +1571,6 @@ export class WorldMapsService implements OnModuleInit {
             Math.max(0, Math.trunc(nextValue)),
           );
         }
-        map.cityGlobal = cityGlobal as unknown as Prisma.JsonValue;
-      }
-      if (current.enabled && status === 'building') {
-        const workersByType = this.extractAssignedWorkersByTypeFromMeta(
-          current.meta,
-        );
-        const cityGlobal = this.normalizeCityGlobalInput(map.cityGlobal);
-        this.releaseWorkersByType(cityGlobal.population, workersByType);
         map.cityGlobal = cityGlobal as unknown as Prisma.JsonValue;
       }
       if (presetSpace > 0) {
@@ -1892,9 +1874,7 @@ export class WorldMapsService implements OnModuleInit {
     let cityGlobal = this.normalizeCityGlobalInput(mapRow.cityGlobal);
     const auditBefore = this.createCityAuditSnapshot(cityGlobal);
     if (advanceDay) cityGlobal.day = Math.max(0, cityGlobal.day + 1);
-    const dailyPopulationPool = this.createPopulationAvailablePool(
-      cityGlobal.population,
-    );
+    let dailyPopulationPool: PopulationAvailablePool | undefined;
     let tileStates = this.normalizeTileStateAssignmentsInput(
       mapRow.tileStateAssignments,
       this.normalizeTilePresetsInput(mapRow.tileStatePresets),
@@ -2082,6 +2062,22 @@ export class WorldMapsService implements OnModuleInit {
     let appliedActions = 0;
     let failedRules = 0;
     const logs: RuleExecutionLog[] = [];
+    const logConstructionPopulationFailures = () => {
+      const constructionPopulationCheck =
+        this.validateConstructionPopulationAvailability(cityGlobal, instances);
+      for (const failure of constructionPopulationCheck.failures) {
+        failedRules += 1;
+        logs.push({
+          instanceId: failure.instanceId,
+          presetId: failure.presetId,
+          presetName: failure.presetName,
+          event: 'daily',
+          ruleId: '__construction_population__',
+          status: 'failed',
+          reason: failure.reason,
+        });
+      }
+    };
     const resourceTrace: ResourceDeltaTrace[] = [];
     const overflowTracker: OverflowConversionTracker = {
       convertedGold: 0,
@@ -2105,8 +2101,18 @@ export class WorldMapsService implements OnModuleInit {
       deficitFood: 0,
       goldSpent: 0,
     };
+    const noConstructionWorkers: Record<PopulationTrackedId, number> = {
+      settlers: 0,
+      engineers: 0,
+      scholars: 0,
+      laborers: 0,
+    };
 
     if (event === 'daily') {
+      logConstructionPopulationFailures();
+    }
+
+    if (event === 'daily' && failedRules <= 0) {
       for (const origin of instances.filter((entry) => entry.enabled)) {
         if (!origin.preset) continue;
         const requiredEffort = Math.max(
@@ -2115,17 +2121,18 @@ export class WorldMapsService implements OnModuleInit {
         );
         if (requiredEffort <= 0) {
           const workersByType = computeAssignedWorkersByType(origin);
+          const workers = this.sumAssignedWorkersByType(workersByType);
           const nextMeta = this.withBuildMeta(
             origin.meta,
             'active',
-            this.sumAssignedWorkersByType(workersByType),
-            workersByType,
+            0,
+            noConstructionWorkers,
           );
-          if (this.readBuildStatusFromMeta(origin.meta) !== 'active') {
-            this.releaseWorkersByType(cityGlobal.population, workersByType);
+          const wasNotActive = this.readBuildStatusFromMeta(origin.meta) !== 'active';
+          if (wasNotActive || workers > 0) {
             instancePatchById.set(origin.id, { meta: nextMeta });
             origin.meta = nextMeta;
-            activateNow.add(origin.id);
+            if (wasNotActive) activateNow.add(origin.id);
           }
           continue;
         }
@@ -2133,14 +2140,15 @@ export class WorldMapsService implements OnModuleInit {
         const status = determineStatus(origin);
         if (status === 'active') {
           const workersByType = computeAssignedWorkersByType(origin);
+          const workers = this.sumAssignedWorkersByType(workersByType);
           const nextMeta = this.withBuildMeta(
             origin.meta,
             'active',
-            this.sumAssignedWorkersByType(workersByType),
-            workersByType,
+            0,
+            noConstructionWorkers,
           );
-          if (this.readBuildStatusFromMeta(origin.meta) !== 'active') {
-            this.releaseWorkersByType(cityGlobal.population, workersByType);
+          const wasNotActive = this.readBuildStatusFromMeta(origin.meta) !== 'active';
+          if (wasNotActive || workers > 0) {
             instancePatchById.set(origin.id, {
               ...(instancePatchById.get(origin.id) ?? {}),
               meta: nextMeta,
@@ -2173,8 +2181,8 @@ export class WorldMapsService implements OnModuleInit {
         const nextMeta = this.withBuildMeta(
           origin.meta,
           reached ? 'active' : 'building',
-          workers,
-          workersByType,
+          0,
+          noConstructionWorkers,
         );
         instancePatchById.set(origin.id, {
           ...(instancePatchById.get(origin.id) ?? {}),
@@ -2183,9 +2191,6 @@ export class WorldMapsService implements OnModuleInit {
         });
         origin.progressEffort = nextProgress;
         origin.meta = nextMeta;
-        if (reached) {
-          this.releaseWorkersByType(cityGlobal.population, workersByType);
-        }
         logs.push({
           instanceId: origin.id,
           presetId: origin.presetId,
@@ -2200,6 +2205,17 @@ export class WorldMapsService implements OnModuleInit {
       }
     }
 
+    if (event === 'daily') {
+      dailyPopulationPool = this.createPopulationAvailablePool(
+        cityGlobal.population,
+      );
+      this.consumeCommittedPopulationFromPool(dailyPopulationPool, cityGlobal);
+      this.consumeBuildingConstructionWorkersFromPool(
+        dailyPopulationPool,
+        instances,
+      );
+    }
+
     const targets =
       event === 'daily'
         ? instances.filter(
@@ -2210,19 +2226,25 @@ export class WorldMapsService implements OnModuleInit {
           )
         : instances.filter((entry) => targetSet.has(entry.id));
 
-    for (const origin of targets) {
-      runRulesForOrigin(origin, event);
-      // NOTE:
-      // sustain rules are runtime/derived effects and must not be persisted
-      // into tile state on build-time event execution.
+    if (!(event === 'daily' && failedRules > 0)) {
+      for (const origin of targets) {
+        runRulesForOrigin(origin, event);
+        // NOTE:
+        // sustain rules are runtime/derived effects and must not be persisted
+        // into tile state on build-time event execution.
+      }
     }
 
-    if (event === 'daily' && activateNow.size > 0) {
+    if (event === 'daily' && failedRules <= 0 && activateNow.size > 0) {
       for (const origin of instances.filter((entry) =>
         activateNow.has(entry.id),
       )) {
         runRulesForOrigin(origin, 'onBuild', { skipDailyUpkeep: true });
       }
+    }
+
+    if (event === 'daily' && failedRules <= 0) {
+      logConstructionPopulationFailures();
     }
 
     if (event === 'daily') {
@@ -3077,10 +3099,9 @@ export class WorldMapsService implements OnModuleInit {
 
   private normalizeCityGlobalForUpdate(
     input: unknown,
-    currentInput: unknown,
+    _currentInput: unknown,
   ): CityGlobalState {
     const next = this.normalizeCityGlobalInput(input);
-    const current = this.normalizeCityGlobalInput(currentInput);
     const populationIn = this.toPlainRecord((input as any)?.population);
     if (!populationIn) return next;
 
@@ -3089,25 +3110,14 @@ export class WorldMapsService implements OnModuleInit {
       if (!entryIn) continue;
       if (Object.prototype.hasOwnProperty.call(entryIn, 'available')) continue;
 
-      const currentEntry = current.population[id] ?? { total: 0, available: 0 };
-      const occupied = Math.max(
-        0,
-        Math.trunc(Number(currentEntry.total ?? 0) || 0) -
-          Math.trunc(Number(currentEntry.available ?? 0) || 0),
-      );
       const nextEntry = next.population[id] ?? { total: 0, available: 0 };
       const nextTotal = Math.max(
         0,
         Math.trunc(Number(nextEntry.total ?? 0) || 0),
       );
-      if (nextTotal < occupied) {
-        throw new BadRequestException(
-          `${id} total is below allocated population (${nextTotal}/${occupied})`,
-        );
-      }
       next.population[id] = {
         total: nextTotal,
-        available: nextTotal - occupied,
+        available: nextTotal,
       };
     }
     return next;
@@ -3297,25 +3307,148 @@ export class WorldMapsService implements OnModuleInit {
     return {
       settlers: Math.max(
         0,
-        Math.trunc(Number(population.settlers?.available ?? 0) || 0),
+        Math.trunc(Number(population.settlers?.total ?? 0) || 0),
       ),
       engineers: Math.max(
         0,
-        Math.trunc(Number(population.engineers?.available ?? 0) || 0),
+        Math.trunc(Number(population.engineers?.total ?? 0) || 0),
       ),
       scholars: Math.max(
         0,
-        Math.trunc(Number(population.scholars?.available ?? 0) || 0),
+        Math.trunc(Number(population.scholars?.total ?? 0) || 0),
       ),
       laborers: Math.max(
         0,
-        Math.trunc(Number(population.laborers?.available ?? 0) || 0),
+        Math.trunc(Number(population.laborers?.total ?? 0) || 0),
       ),
       elderly: Math.max(
         0,
-        Math.trunc(Number(population.elderly?.available ?? 0) || 0),
+        Math.trunc(Number(population.elderly?.total ?? 0) || 0),
       ),
     };
+  }
+
+  private consumeCommittedPopulationFromPool(
+    pool: PopulationAvailablePool,
+    cityGlobal: CityGlobalState,
+  ) {
+    const committed =
+      this.toPlainRecord((cityGlobal as any).troops)?.committedPopulation ?? {};
+    for (const id of POPULATION_IDS) {
+      const used = Math.max(
+        0,
+        Math.trunc(Number((committed as any)?.[id] ?? 0) || 0),
+      );
+      if (used <= 0) continue;
+      pool[id] = Math.max(0, Math.trunc(Number(pool[id] ?? 0) || 0) - used);
+    }
+  }
+
+  private consumeConstructionWorkersByTypeFromPool(
+    pool: PopulationAvailablePool,
+    workersByType: Record<PopulationTrackedId, number>,
+  ) {
+    for (const id of TRACKED_WORKER_POPULATION_IDS) {
+      const used = Math.max(
+        0,
+        Math.trunc(Number(workersByType[id] ?? 0) || 0),
+      );
+      if (used <= 0) continue;
+      pool[id] = Math.max(0, Math.trunc(Number(pool[id] ?? 0) || 0) - used);
+    }
+  }
+
+  private consumeBuildingConstructionWorkersFromPool(
+    pool: PopulationAvailablePool,
+    instances: Array<
+      Pick<
+        WorldMapBuildingInstanceRow,
+        'id' | 'enabled' | 'progressEffort' | 'meta' | 'createdAt'
+      > & {
+        preset?: WorldMapBuildingPresetRow | null;
+      }
+    >,
+  ) {
+    for (const instance of this.sortInstancesForPopulationPool(instances)) {
+      if (instance.enabled === false) continue;
+      if (this.getBuildStatusForInstance(instance, instance.preset) === 'active') {
+        continue;
+      }
+      this.consumeConstructionWorkersByTypeFromPool(
+        pool,
+        this.extractAssignedWorkersByTypeFromMeta(instance.meta),
+      );
+    }
+  }
+
+  private sortInstancesForPopulationPool<
+    T extends Pick<WorldMapBuildingInstanceRow, 'id' | 'createdAt'>,
+  >(instances: T[]): T[] {
+    return [...instances].sort((a, b) => {
+      const ta = new Date(a.createdAt).getTime();
+      const tb = new Date(b.createdAt).getTime();
+      if (ta !== tb) return ta - tb;
+      return a.id.localeCompare(b.id);
+    });
+  }
+
+  private validateConstructionPopulationAvailability(
+    cityGlobal: CityGlobalState,
+    instances: RuntimeInstance[],
+  ) {
+    const pool = this.createPopulationAvailablePool(cityGlobal.population);
+    this.consumeCommittedPopulationFromPool(pool, cityGlobal);
+    const failures: Array<{
+      instanceId: string;
+      presetId: string;
+      presetName: string;
+      reason: string;
+    }> = [];
+
+    for (const instance of this.sortInstancesForPopulationPool(instances)) {
+      if (instance.enabled === false || !instance.preset) continue;
+      const status = this.getBuildStatusForInstance(instance, instance.preset);
+      if (status === 'active') {
+        const result = this.consumePopulationUpkeepFromPool(
+          pool,
+          instance.preset.upkeep?.population ?? {},
+          instance.meta,
+        );
+        if (!result.ok) continue;
+        continue;
+      }
+
+      const workersByType = this.extractAssignedWorkersByTypeFromMeta(
+        instance.meta,
+      );
+      const lacks = TRACKED_WORKER_POPULATION_IDS.map((id) => {
+        const required = Math.max(
+          0,
+          Math.trunc(Number(workersByType[id] ?? 0) || 0),
+        );
+        if (required <= 0) return null;
+        const current = Math.max(
+          0,
+          Math.trunc(Number(pool[id] ?? 0) || 0),
+        );
+        if (current >= required) return null;
+        return `${POPULATION_LABELS[id]}(${current}/${required})`;
+      }).filter(Boolean) as string[];
+
+      if (lacks.length > 0) {
+        failures.push({
+          instanceId: instance.id,
+          presetId: instance.presetId,
+          presetName: instance.preset.name,
+          reason: `건설 현장 투입 인원 초과: ${lacks.join(', ')}`,
+        });
+        continue;
+      }
+
+      this.consumeConstructionWorkersByTypeFromPool(pool, workersByType);
+    }
+
+    return { ok: failures.length === 0, failures };
   }
 
   private readUpkeepAnyNonElderlyByTypeFromMeta(
@@ -3439,6 +3572,7 @@ export class WorldMapsService implements OnModuleInit {
     },
   ) {
     const pool = this.createPopulationAvailablePool(cityGlobal.population);
+    this.consumeCommittedPopulationFromPool(pool, cityGlobal);
     const rows = await this.prisma.worldMapBuildingInstance.findMany({
       where: {
         mapId,
@@ -3448,13 +3582,19 @@ export class WorldMapsService implements OnModuleInit {
           : {}),
       },
       include: { preset: true },
-      orderBy: [{ row: 'asc' }, { col: 'asc' }, { createdAt: 'asc' }],
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
     for (const row of rows) {
       const instance = this.toBuildingInstanceRow(row);
       const preset = this.toBuildingPresetRow(row.preset);
       const status = this.getBuildStatusForInstance(instance, preset);
-      if (status !== 'active') continue;
+      if (status !== 'active') {
+        this.consumeConstructionWorkersByTypeFromPool(
+          pool,
+          this.extractAssignedWorkersByTypeFromMeta(instance.meta),
+        );
+        continue;
+      }
       const result = this.consumePopulationUpkeepFromPool(
         pool,
         preset.upkeep?.population ?? {},
@@ -3703,47 +3843,6 @@ export class WorldMapsService implements OnModuleInit {
       if (available < required) return false;
     }
     return true;
-  }
-
-  private reserveWorkersByType(
-    population: CityPopulationState,
-    workersByType: Record<PopulationTrackedId, number>,
-  ) {
-    for (const id of TRACKED_WORKER_POPULATION_IDS) {
-      const required = Math.max(
-        0,
-        Math.trunc(Number(workersByType[id] ?? 0) || 0),
-      );
-      if (required <= 0) continue;
-      const entry = population[id] ?? { total: 0, available: 0 };
-      const available = Math.max(
-        0,
-        Math.trunc(Number(entry.available ?? 0) || 0),
-      );
-      entry.available = Math.max(0, available - required);
-      population[id] = entry;
-    }
-  }
-
-  private releaseWorkersByType(
-    population: CityPopulationState,
-    workersByType: Record<PopulationTrackedId, number>,
-  ) {
-    for (const id of TRACKED_WORKER_POPULATION_IDS) {
-      const releasing = Math.max(
-        0,
-        Math.trunc(Number(workersByType[id] ?? 0) || 0),
-      );
-      if (releasing <= 0) continue;
-      const entry = population[id] ?? { total: 0, available: 0 };
-      const total = Math.max(0, Math.trunc(Number(entry.total ?? 0) || 0));
-      const available = Math.max(
-        0,
-        Math.trunc(Number(entry.available ?? 0) || 0),
-      );
-      entry.available = Math.min(total, available + releasing);
-      population[id] = entry;
-    }
   }
 
   private tryConsumeDailyUpkeep(
@@ -5282,6 +5381,9 @@ export class WorldMapsService implements OnModuleInit {
         }
         return out;
       })(),
+      ...(input?.troops && typeof input.troops === 'object'
+        ? { troops: input.troops }
+        : {}),
       day: toIntSafe(dayIn, DEFAULT_CITY_GLOBAL.day),
       satisfaction: toIntSafe(satisfactionIn, DEFAULT_CITY_GLOBAL.satisfaction),
       populationCap,

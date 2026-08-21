@@ -8,6 +8,8 @@ import type {
   ArchiveConfidenceStatus,
   DiscordCollectionMode,
   DiscordCollectionStatus,
+  AnalysisJobStatus,
+  AnalysisPriority,
 } from '@prisma/client';
 
 export type PageQuery = {
@@ -103,6 +105,23 @@ export type DiscordCollectionRunListQuery = PageQuery & {
   mode?: DiscordCollectionMode;
 };
 
+export type AnalysisJobListQuery = PageQuery & {
+  campaignId?: string;
+  status?: AnalysisJobStatus;
+};
+
+export type CreateSmokeAnalysisJobBody = {
+  idempotencyKey?: unknown;
+  priority?: unknown;
+  maxAttempts?: unknown;
+  message?: unknown;
+  shouldFail?: unknown;
+};
+
+export type CancelAnalysisJobBody = {
+  reason?: unknown;
+};
+
 export type ActorRuleListQuery = PageQuery & {
   search?: string;
   logSourceId?: string;
@@ -194,4 +213,19 @@ export const DISCORD_COLLECTION_STATUSES: readonly DiscordCollectionStatus[] = [
   'SUCCEEDED',
   'PARTIAL',
   'FAILED',
+];
+export const ANALYSIS_JOB_STATUSES: readonly AnalysisJobStatus[] = [
+  'WAITING_AUTHORIZATION',
+  'QUEUED',
+  'RUNNING',
+  'PAUSED',
+  'SUCCEEDED',
+  'COMPLETED_WITH_ERRORS',
+  'FAILED',
+  'CANCELED',
+];
+export const ANALYSIS_PRIORITIES: readonly AnalysisPriority[] = [
+  'HIGH',
+  'NORMAL',
+  'LOW',
 ];

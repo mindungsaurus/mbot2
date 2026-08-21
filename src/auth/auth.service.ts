@@ -3,13 +3,14 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, UserCapabilityType } from '@prisma/client';
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'crypto';
 
 type PublicUser = {
   id: string;
   username: string;
   isAdmin: boolean;
+  capabilities: UserCapabilityType[];
 };
 
 @Injectable()
@@ -26,6 +27,20 @@ export class AuthService {
 
   private hashToken(token: string): string {
     return createHash('sha256').update(token).digest('hex');
+  }
+
+  private toPublicUser(user: {
+    id: string;
+    username: string;
+    isAdmin: boolean;
+    capabilities?: { capability: UserCapabilityType }[];
+  }): PublicUser {
+    return {
+      id: user.id,
+      username: user.username,
+      isAdmin: user.isAdmin,
+      capabilities: user.capabilities?.map((row) => row.capability) ?? [],
+    };
   }
 
   async register(
@@ -53,7 +68,7 @@ export class AuthService {
       data: { username, passwordHash, passwordSalt: salt },
     });
 
-    return { id: user.id, username: user.username, isAdmin: user.isAdmin };
+    return this.toPublicUser(user);
   }
 
   async login(
@@ -99,7 +114,7 @@ export class AuthService {
 
     return {
       token,
-      user: { id: user.id, username: user.username, isAdmin: user.isAdmin },
+      user: this.toPublicUser(user),
     };
   }
 
@@ -110,7 +125,7 @@ export class AuthService {
     const tokenHash = this.hashToken(raw);
     const session = await this.prisma.userSession.findUnique({
       where: { tokenHash },
-      include: { user: true },
+      include: { user: { include: { capabilities: true } } },
     });
 
     if (!session) return null;
@@ -120,11 +135,7 @@ export class AuthService {
       data: { lastSeenAt: new Date() },
     });
 
-    return {
-      id: session.user.id,
-      username: session.user.username,
-      isAdmin: session.user.isAdmin,
-    };
+    return this.toPublicUser(session.user);
   }
 
   async claimAdmin(userId: string, keyRaw: string): Promise<PublicUser> {
@@ -147,7 +158,7 @@ export class AuthService {
       data: { isAdmin: true },
     });
 
-    return { id: user.id, username: user.username, isAdmin: user.isAdmin };
+    return this.toPublicUser(user);
   }
 
   async logout(token: string): Promise<void> {
